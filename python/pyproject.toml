@@ -8,8 +8,14 @@ version = "1.1.0"
 description = "Official Python client library for Horux monitoring platform"
 readme = "README.md"
 requires-python = ">=3.8"
-license = "Apache-2.0"
-license-files = ["LICENSE"]
+# The TABLE form, not the PEP 639 SPDX string, and the classifier below stays with it.
+# `license = "Apache-2.0"` is the modern spelling and it broke the 3.8 leg of the test
+# matrix: the setuptools available for Python 3.8 predates PEP 639 and rejects it with
+# "`project.license` must be valid exactly by one definition (2 matches found)". The fix
+# cannot be a newer build backend either -- setuptools >= 77, the first to understand the
+# string form, requires Python >= 3.9. So while `requires-python = ">=3.8"` stands, this is
+# the only spelling that works everywhere. Newer setuptools deprecates it but accepts it.
+license = {text = "Apache-2.0"}
 authors = [
     {name = "Aterve", email = "support@aterve.com"}
 ]
@@ -17,6 +23,7 @@ keywords = ["monitoring", "metrics", "logs", "observability", "telemetry"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
