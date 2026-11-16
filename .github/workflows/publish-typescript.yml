@@ -52,26 +52,17 @@ jobs:
       - name: Build SDK
         run: npm run build
 
-      # A published release must not be untested. Same false comment as in
-      # ci-sdk-typescript.yml; 24 real tests exist and pass.
+      # A published release must not be untested. (The comment this replaces claimed 24
+      # tests; there are 54.)
       - name: Run tests
         run: npm test
 
-      - name: Extract version from tag
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-        id: extract_version
-        run: |
-          TAG=${GITHUB_REF#refs/tags/}
-          VERSION=${TAG#typescript-v}
-          VERSION=${VERSION#ts-sdk-v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Publishing version: $VERSION"
-
-      - name: Update package version (from tag)
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-        run: |
-          npm version ${{ steps.extract_version.outputs.version }} --no-git-tag-version --allow-same-version
-          cat package.json | grep version
+      # The two steps that used to sit here derived the version from `refs/tags/` and were
+      # gated on `github.event_name == 'push'`. Both are now unreachable: this workflow is
+      # `workflow_call`-only (see the note on the triggers), and inside a called workflow
+      # `github.event_name` is the CALLER's event, which for `release.yml` is
+      # `workflow_dispatch`. A step that can never run reads like a path that works, so
+      # they are gone rather than left as decoration.
 
       - name: Update package version (manual/called)
         if: (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.version != ''
@@ -183,16 +174,29 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
         run: |
           set -euo pipefail
+          # The dist-tag, which `npm publish` otherwise always sets to `latest`.
+          # `inputs.prerelease` reached only the GitHub Release flag, so publishing
+          # 1.2.0-rc.1 would have moved `latest` onto a prerelease and every plain
+          # `npm install @aterve/horux-client` would have resolved to it. Decided from the
+          # version itself rather than the input, because the version is what semver and
+          # the registry agree on: anything with a `-` suffix is a prerelease.
+          VERSION='${{ needs.build.outputs.version }}'
+          case "$VERSION" in
+            *-*) TAG=next ;;
+            *)   TAG=latest ;;
+          esac
+          echo "publishing $VERSION under dist-tag '$TAG'"
+
           if [ -n "${NPM_TOKEN:-}" ]; then
             echo "::warning::Publishing with NPM_PUBLISH_TOKEN. This is the bootstrap path:"
             echo "::warning::once the package exists, configure trusted publishing on npmjs"
             echo "::warning::for workflow 'release.yml' and delete this secret."
             npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
-            npm publish --ignore-scripts --access public
+            npm publish --ignore-scripts --access public --tag "$TAG"
           else
             echo "No NPM_PUBLISH_TOKEN present: publishing via trusted publishing (OIDC)."
             echo "Provenance is attached automatically on this path."
-            npm publish --ignore-scripts --access public
+            npm publish --ignore-scripts --access public --tag "$TAG"
           fi
 
       - name: Create GitHub Packages summary
