@@ -23,11 +23,9 @@ npm install @aterve/horux-client
 ```typescript
 import { HoruxClient } from '@aterve/horux-client';
 
-// Defaults to https://ingest.horux.io
 const client = new HoruxClient({
   apiToken: 'tenant_<tenant-id>_<secret>',
   resourceId: 'my-resource-uuid',
-  // ingestorUrl: 'http://localhost:3434', // Override for local testing
 });
 
 // Send metrics
@@ -76,8 +74,6 @@ const client = new HoruxClient({
 import { HoruxClient, HoruxConfig } from '@aterve/horux-client';
 
 const config: HoruxConfig = {
-  // ingestorUrl defaults to https://ingest.horux.io
-  // ingestorUrl: 'http://localhost:3434', // Override for local testing
   apiToken: 'tenant_550e8400-e29b-41d4-a716-446655440000_secretkey123',
   resourceId: 'my-resource-uuid',
   serviceName: 'orders-api', // optional; see "Resource vs. service" below
@@ -99,7 +95,7 @@ const client = new HoruxClient(config);
 
 ```typescript
 const config: HoruxConfig = {
-  ingestorUrl: process.env.HORUX_INGESTOR_URL, // Defaults to https://ingest.horux.io
+  ingestorUrl: process.env.HORUX_INGESTOR_URL,
   apiToken: process.env.HORUX_API_TOKEN || '',
   resourceId: process.env.HORUX_RESOURCE_ID || '',
   serviceName: process.env.HORUX_SERVICE_NAME, // optional

@@ -22,8 +22,8 @@ background daemon you have to operate.
 ## Quick start
 
 Every client needs two things: an **API token** (`tenant_<tenant-id>_<secret>`, created in
-the Horux console) and the **resource id** the telemetry belongs to. The ingestor URL
-defaults to `https://ingest.horux.io`.
+the Horux console) and the **resource id** the telemetry belongs to. The ingestor URL is
+configurable; every client has a sensible default.
 
 ```go
 import client "github.com/Aterve/horux-sdk/go"

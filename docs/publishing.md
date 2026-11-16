@@ -43,7 +43,25 @@ another - the same bounded queue, the same five-way failure classification, the
 same 16-batch cycle cap - so a user comparing two of them must be able to read
 one version and know which behaviour they have.
 
-Current version: **1.1.0**. The places it is recorded:
+⚠️ **Amended 16 Nov 2026: that rule governs BEHAVIOUR, not every patch.** The SDKs now
+live in per-language directories with their own tags and registries, and the first thing
+that happened in practice was a TypeScript-only patch for a README change -- which moves no
+behaviour in any client and so cannot create the drift this rule exists to prevent. The rule
+now reads: **a behavioural change bumps all four together; a docs- or packaging-only patch
+may move one SDK alone.** If you are changing the bounded queue, the failure
+classification, the cycle cap or the wire format, bump all four in one commit and release
+them together, exactly as below.
+
+Current versions -- no longer necessarily equal:
+
+| SDK | Version | Published? |
+|---|---|---|
+| TypeScript | 1.1.1 | yes, npmjs |
+| Go | 1.1.0 | not yet |
+| Python | 1.1.0 | not yet |
+| Java | 1.1.0 | not yet |
+
+The places each version is recorded:
 
 | SDK | Where the version lives |
 |---|---|

@@ -77,7 +77,6 @@ public class Main {
 HoruxConfig config = HoruxConfig.builder()
     .apiToken("your-api-token")          // Required
     .resourceId("your-resource-id")         // Required
-    .ingestorUrl("https://ingest.horux.io") // Optional, default shown
     .flushInterval(Duration.ofSeconds(10))  // Optional, default 10s
     .maxBatchSize(1000)                     // Optional, default 1000
     .httpTimeout(Duration.ofSeconds(30))    // Optional, default 30s

@@ -31,13 +31,9 @@ import (
 )
 
 func main() {
-    // Create configuration (defaults to https://ingest.horux.io)
     config := client.DefaultConfig()
     config.APIToken = "tenant_<tenant-id>_<secret>"
     config.ResourceID = "my-resource-uuid"
-
-    // For local testing, override the default URL:
-    // config.IngestorURL = "http://localhost:3434"
 
     // Create unified client
     horusClient, err := client.NewClient(config)
@@ -66,9 +62,6 @@ func main() {
 
 ```go
 config := client.DefaultConfig()
-// IngestorURL defaults to https://ingest.horux.io
-// Override for local testing:
-// config.IngestorURL = "http://localhost:3434"
 config.APIToken = "tenant_550e8400-e29b-41d4-a716-446655440000_secretkey123"
 config.ResourceID = "my-resource-uuid"
 config.ServiceName = "orders-api" // optional; see "Resource vs. service" below
@@ -109,8 +102,6 @@ them separable. Leaving it unset changes nothing about the request you send toda
 #### Environment Variables
 
 ```bash
-# Override default URL for local testing (defaults to https://ingest.horux.io)
-export HORUX_INGESTOR_URL="http://localhost:3434"
 export HORUX_API_TOKEN="tenant_<tenant-id>_<secret>"
 export HORUX_RESOURCE_ID="my-resource-uuid"
 # Optional: what this process calls itself (OTel `service.name` / Prometheus `job`)

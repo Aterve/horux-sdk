@@ -32,11 +32,9 @@ pip install -e .
 ```python
 from horux_client import HoruxClient, HoruxConfig
 
-# Create configuration (defaults to https://ingest.horux.io)
 config = HoruxConfig(
     api_token="tenant_<tenant-id>_<secret>",
     resource_id="my-resource-uuid"
-    # ingestor_url="http://localhost:3434"  # Override for local testing
 )
 
 # Create unified client
@@ -56,8 +54,6 @@ with HoruxClient(config) as client:
 from horux_client import HoruxConfig
 
 config = HoruxConfig(
-    # ingestor_url defaults to https://ingest.horux.io
-    # ingestor_url="http://localhost:3434",  # Override for local testing
     api_token="tenant_550e8400-e29b-41d4-a716-446655440000_secretkey123",
     resource_id="my-resource-uuid",
     flush_interval=10.0,  # seconds
@@ -73,8 +69,6 @@ config.add_instance_metadata("environment", "production")
 #### Environment Variables
 
 ```bash
-# Override default URL for local testing (defaults to https://ingest.horux.io)
-export HORUX_INGESTOR_URL="http://localhost:3434"
 export HORUX_API_TOKEN="tenant_<tenant-id>_<secret>"
 export HORUX_RESOURCE_ID="my-resource-uuid"
 
