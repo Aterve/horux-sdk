@@ -53,21 +53,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install build twine
 
-      - name: Extract version from tag
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-        id: extract_version
-        run: |
-          TAG=${GITHUB_REF#refs/tags/}
-          VERSION=${TAG#python-v}
-          VERSION=${VERSION#python-sdk-v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Publishing version: $VERSION"
-
-      - name: Update package version (from tag)
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-        run: |
-          sed -i "s/^version = .*/version = \"${{ steps.extract_version.outputs.version }}\"/" pyproject.toml
-          grep "^version = " pyproject.toml
+      # The steps that used to sit here derived the version from `refs/tags/` behind
+      # `github.event_name == 'push'`. Unreachable now: this workflow is
+      # `workflow_call`-only, and inside a called workflow `github.event_name` is the
+      # CALLER's event (`workflow_dispatch` for release.yml). A step that can never run
+      # reads like a path that works.
 
       - name: Update package version (manual/called)
         if: (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.version != ''
@@ -173,7 +163,12 @@ jobs:
     name: Create GitHub Release
     runs-on: ubuntu-latest
     needs: build-and-publish
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    # Runs on every release, not only a tag push. The condition here used to be
+    # `github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')`, and inside a
+    # called workflow `github.event_name` is the CALLER's event -- `workflow_dispatch` for
+    # release.yml -- so this job was SKIPPED on every release. Demonstrated on the first
+    # real publish: the package reached its registry and the repository kept no tag and no
+    # release to say so. `needs` already gates this on a successful publish.
     permissions:
       contents: write
 
@@ -201,7 +196,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: python-v${{ needs.build-and-publish.outputs.version }}
           release_name: Python SDK v${{ steps.extract_version.outputs.version }}
           body: |
             # Python SDK v${{ steps.extract_version.outputs.version }}
