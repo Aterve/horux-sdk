@@ -125,6 +125,11 @@ jobs:
       - name: Dispatch publish-python.yml and wait for it
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # `gh` resolves the repository from the local git remote, and this job has no
+          # checkout step -- without this it fails with
+          # `failed to run git: fatal: not a git repository`, which is what the first
+          # dispatch attempt did. Explicit beats cloning the repo to tell `gh` its name.
+          GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.validate-version.outputs.without_v }}
           PRERELEASE: ${{ inputs.prerelease }}
         run: |
