@@ -127,6 +127,13 @@ jobs:
       - name: Verify module
         run: go mod verify
 
+      # The three examples moved here with the SDK (they used to sit under the platform's
+      # data-ingestor, which `require`d the SDK through a local `replace` purely to compile
+      # them). This job was called "Build Examples" while building no examples, because
+      # there were none in the package; now there are, and it builds them.
+      - name: Build the examples
+        run: go build ./examples/...
+
       - name: Build SDK (dry run)
         run: go build ./...
 
