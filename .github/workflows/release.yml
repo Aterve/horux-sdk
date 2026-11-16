@@ -113,7 +113,9 @@ jobs:
     if: inputs.component == 'python' || inputs.component == 'all'
     permissions:
       contents: write
-      packages: write
+      # PyPI trusted publishing, same shape as the TypeScript job above: the OIDC token is
+      # the credential, and the claim PyPI matches names THIS workflow's filename.
+      id-token: write
     uses: ./.github/workflows/publish-python.yml
     secrets: inherit
     with:

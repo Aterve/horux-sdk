@@ -1,26 +1,16 @@
 name: 2 · Publish — Python
 
+# `workflow_call` ONLY. PyPI matches the OIDC `workflow_ref` claim, which GitHub sets to
+# the workflow that STARTED the run -- so a project whose trusted publisher names
+# `release.yml` cannot also be published by a direct `python-v*` tag push or a dispatch of
+# this file. One entry point, one identity: `3 · Release — SDKs (manual)`.
 on:
-  push:
-    tags:
-      - 'python-v*.*.*'
   workflow_call:
     inputs:
       version:
         required: false
         type: string
       prerelease:
-        required: false
-        default: false
-        type: boolean
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version to publish (leave empty to use pyproject.toml version)'
-        required: false
-        type: string
-      prerelease:
-        description: 'Mark as pre-release'
         required: false
         default: false
         type: boolean
@@ -35,7 +25,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
+      # Trusted publishing: PyPI exchanges this short-lived OIDC token for a one-shot
+      # upload credential, so there is no API token anywhere. Must also be granted by the
+      # CALLING job in release.yml; scripts/check-workflow-permissions.mjs enforces that.
+      id-token: write
 
     outputs:
       version: ${{ steps.package_version.outputs.version }}
@@ -123,19 +116,31 @@ jobs:
       # `https://nuget.pkg.github.com/<owner>`, the NuGet endpoint, behind
       # `continue-on-error: true`: it could never have worked, and said nothing when it
       # didn't. The flag is gone with it; a publish that fails must fail the release.
-      - name: Publish to PyPI
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_PUBLISH_TOKEN }}
+      # The exact value PyPI will match, printed so the trusted-publisher form cannot be
+      # filled in from guesswork. `github.workflow_ref` is the workflow that STARTED the
+      # run, which inside a called workflow is the CALLER -- the claim PyPI checks. PyPI's
+      # own docs do not cover reusable workflows, so this line is how the first release
+      # proves which filename belongs in the form.
+      - name: Show the workflow identity PyPI will see
         run: |
-          set -euo pipefail
-          if [ -z "${TWINE_PASSWORD:-}" ]; then
-            echo "::error::PYPI_PUBLISH_TOKEN is not set, so this build cannot be published."
-            echo "::error::Add a PyPI API token as the repository secret PYPI_PUBLISH_TOKEN."
-            echo "::error::Refusing to report a release that published nothing."
-            exit 1
-          fi
-          twine upload dist/*
+          echo "workflow_ref : ${{ github.workflow_ref }}"
+          echo "repository   : ${{ github.repository }}"
+          echo "Configure the PyPI trusted publisher with the workflow FILENAME above."
+
+      # Trusted publishing (OIDC). No PYPI_PUBLISH_TOKEN, and none needed even for the very
+      # first upload: PyPI supports a "pending publisher", which creates the project on
+      # first use and then converts itself into a normal publisher. That is the difference
+      # from npm, where the package must exist before a trusted publisher can be configured
+      # at all -- so the TypeScript side keeps a documented one-off token path and this one
+      # does not.
+      #
+      # `packages-dir` is relative to the WORKSPACE, not to this job's `working-directory`,
+      # which is why it says `python/dist` and not `dist`.
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          packages-dir: python/dist
+          print-hash: true
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@v4

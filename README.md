@@ -59,9 +59,40 @@ policy, verification steps and the failure modes each workflow has actually hit.
 | SDK | Registry | Credential |
 |---|---|---|
 | TypeScript | npmjs | **trusted publishing (OIDC)** — no secret once bootstrapped |
-| Python | PyPI | `PYPI_PUBLISH_TOKEN` (PyPI supports trusted publishing too; not wired yet) |
+| Python | PyPI | **trusted publishing (OIDC)** — no secret, ever |
 | Go | Go module proxy | none — the proxy serves the tag |
 | Java | GitHub Packages | `GITHUB_TOKEN`, built in |
+
+#### PyPI trusted publishing
+
+Same mechanism, and simpler, because **PyPI supports a "pending publisher"**: you register
+the publisher for a project that does not exist yet, and the first trusted publish creates
+the project and converts the pending publisher into a normal one. So unlike npm there is no
+token bootstrap at all — the Python SDK never needs a secret.
+
+Register it at [pypi.org/manage/account/publishing](https://pypi.org/manage/account/publishing/):
+
+| Field | Value |
+|---|---|
+| PyPI project name | `horux-client` |
+| Owner | `Aterve` |
+| Repository name | `horux-sdk` |
+| Workflow name | `release.yml` |
+| Environment | *(optional; PyPI recommends one with manual approvers)* |
+
+A pending publisher does **not** reserve the name — if someone else registers `horux-client`
+before the first publish, the pending publisher is invalidated.
+
+The upload uses `pypa/gh-action-pypi-publish`, pinned by commit SHA, which performs the OIDC
+exchange itself. `packages-dir` is `python/dist`, because an action's paths resolve against
+the workspace and not against the job's `working-directory` — an easy and silent mistake.
+
+⚠️ **PyPI's docs do not say which filename to configure when the publish job lives in a
+reusable workflow.** PyPI matches the OIDC `workflow_ref` claim, and GitHub sets that to the
+workflow that *started* the run, which is `release.yml` — so that is what the table above
+says. Rather than leave it to inference, the workflow prints `github.workflow_ref` just
+before uploading, so the first release shows you the exact value PyPI will compare against.
+A mismatch is a clear 403 from PyPI naming the claims it received, not a silent no-op.
 
 #### npm trusted publishing
 

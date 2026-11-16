@@ -8,7 +8,8 @@ This guide covers publishing the Horux client SDKs to their respective package r
 > 1. **Registries and credentials.** TypeScript publishes to **npmjs** via **trusted
 >    publishing (OIDC)** — no npm token, provenance automatic, and the trusted publisher on
 >    npmjs must name `release.yml` because npm validates the *calling* workflow. Python
->    publishes to **PyPI** with a token, not GitHub The Python workflow previously uploaded to `nuget.pkg.github.com` — the
+>    publishes to **PyPI** by trusted publishing as well (no token at all — PyPI's pending
+>    publisher creates the project on first use), not GitHub The Python workflow previously uploaded to `nuget.pkg.github.com` — the
 >    NuGet endpoint — behind `continue-on-error`, so it had never published anything.
 >    Java is still on GitHub Packages and is the one SDK that needs authentication to
 >    consume; moving it to Maven Central is an open task.
@@ -419,9 +420,9 @@ Python distribution - under `continue-on-error: true`, and then cut a GitHub Rel
 regardless. So a "successful" Python release published nothing, silently, for as long as
 the workflow existed.
 
-It now uploads to PyPI with `TWINE_USERNAME=__token__` and `PYPI_PUBLISH_TOKEN`, the
-`continue-on-error` is gone, and the step fails with a named error if the secret is
-missing rather than reporting a release that shipped nothing.
+It now uploads to PyPI through `pypa/gh-action-pypi-publish` using **trusted publishing
+(OIDC)**: no API token at all, not even for the first upload, because PyPI's "pending
+publisher" creates the project on first use. The `continue-on-error` is gone with it.
 
 ---
 
