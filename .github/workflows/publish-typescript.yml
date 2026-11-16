@@ -212,9 +212,6 @@ jobs:
           echo "### Installation" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "# Add to .npmrc:" >> $GITHUB_STEP_SUMMARY
-          echo "@${REPO_OWNER}:registry=https://npm.pkg.github.com" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
           echo "npm install @${REPO_OWNER}/horux-client@${VERSION}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
@@ -242,12 +239,7 @@ jobs:
 
             ## Installation
 
-            Add to your `.npmrc`:
-            ```
-            @${{ github.repository_owner }}:registry=https://npm.pkg.github.com
-            ```
-
-            Then install:
+            Public on npmjs, so no `.npmrc` and no authentication:
             ```bash
             npm install @${{ github.repository_owner }}/horux-client@${{ needs.build.outputs.version }}
             ```

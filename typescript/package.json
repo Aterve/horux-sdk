@@ -33,11 +33,17 @@
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
+    "@aterve:registry": "https://registry.npmjs.org",
     "access": "public",
     "provenance": true
   },
   "homepage": "https://github.com/Aterve/horux-sdk/tree/main/typescript#readme",
   "bugs": {
     "url": "https://github.com/Aterve/horux-sdk/issues"
-  }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ]
 }
