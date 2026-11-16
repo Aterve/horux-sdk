@@ -165,23 +165,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Extract version from tag
-        id: extract_version
-        run: |
-          TAG=${GITHUB_REF#refs/tags/}
-          VERSION=${TAG#java-v}
-          VERSION=${VERSION#java-sdk-v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
+      # The step that used to sit here re-derived the version by stripping
+      # `refs/tags/` from GITHUB_REF. Under a dispatch that is `refs/heads/main`, so it
+      # produced a "version" of `refs/heads/main` -- which named the release
+      # `Java SDK vrefs/heads/main` and made the asset upload look for
+      # `dist/horux_client-refs/heads/main-py3-none-any.whl` (ENOENT). The version comes
+      # from the job that built the artifact instead: `needs.publish-github-packages.outputs.version`.
       - name: Create GitHub Release
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: java-v${{ needs.publish-github-packages.outputs.version }}
-          release_name: Java SDK v${{ steps.extract_version.outputs.version }}
+          release_name: Java SDK v${{ needs.publish-github-packages.outputs.version }}
           body: |
-            # Java SDK v${{ steps.extract_version.outputs.version }}
+            # Java SDK v${{ needs.publish-github-packages.outputs.version }}
 
             ## Installation from GitHub Packages
 
@@ -211,7 +209,7 @@ jobs:
             <dependency>
                 <groupId>io.horux</groupId>
                 <artifactId>horux-client</artifactId>
-                <version>${{ steps.extract_version.outputs.version }}</version>
+                <version>${{ needs.publish-github-packages.outputs.version }}</version>
             </dependency>
             ```
 
@@ -255,4 +253,4 @@ jobs:
             - Java 17
             - Java 21
           draft: false
-          prerelease: ${{ inputs.prerelease || contains(steps.extract_version.outputs.version, 'alpha') || contains(steps.extract_version.outputs.version, 'beta') || contains(steps.extract_version.outputs.version, 'rc') }}
+          prerelease: ${{ inputs.prerelease || contains(needs.publish-github-packages.outputs.version, 'alpha') || contains(needs.publish-github-packages.outputs.version, 'beta') || contains(needs.publish-github-packages.outputs.version, 'rc') }}

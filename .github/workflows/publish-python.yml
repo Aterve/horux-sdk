@@ -203,14 +203,12 @@ jobs:
           name: python-sdk-dist
           path: dist/
 
-      - name: Extract version from tag
-        id: extract_version
-        run: |
-          TAG=${GITHUB_REF#refs/tags/}
-          VERSION=${TAG#python-v}
-          VERSION=${VERSION#python-sdk-v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
+      # The step that used to sit here re-derived the version by stripping
+      # `refs/tags/` from GITHUB_REF. Under a dispatch that is `refs/heads/main`, so it
+      # produced a "version" of `refs/heads/main` -- which named the release
+      # `Python SDK vrefs/heads/main` and made the asset upload look for
+      # `dist/horux_client-refs/heads/main-py3-none-any.whl` (ENOENT). The version comes
+      # from the job that built the artifact instead: `needs.build-and-publish.outputs.version`.
       - name: Create GitHub Release
         uses: actions/create-release@v1
         id: create_release
@@ -218,16 +216,16 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: python-v${{ needs.build-and-publish.outputs.version }}
-          release_name: Python SDK v${{ steps.extract_version.outputs.version }}
+          release_name: Python SDK v${{ needs.build-and-publish.outputs.version }}
           body: |
-            # Python SDK v${{ steps.extract_version.outputs.version }}
+            # Python SDK v${{ needs.build-and-publish.outputs.version }}
 
             ## Installation
 
             Download the wheel from the release assets below, then install:
 
             ```bash
-            pip install horux_client-${{ steps.extract_version.outputs.version }}-py3-none-any.whl
+            pip install horux_client-${{ needs.build-and-publish.outputs.version }}-py3-none-any.whl
             ```
 
             ## Quick Start
@@ -263,7 +261,7 @@ jobs:
 
             - Python 3.8 – 3.12
           draft: false
-          prerelease: ${{ inputs.prerelease || contains(steps.extract_version.outputs.version, 'alpha') || contains(steps.extract_version.outputs.version, 'beta') || contains(steps.extract_version.outputs.version, 'rc') }}
+          prerelease: ${{ inputs.prerelease || contains(needs.build-and-publish.outputs.version, 'alpha') || contains(needs.build-and-publish.outputs.version, 'beta') || contains(needs.build-and-publish.outputs.version, 'rc') }}
 
       - name: Upload wheel to release
         uses: actions/upload-release-asset@v1
@@ -271,8 +269,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: dist/horux_client-${{ steps.extract_version.outputs.version }}-py3-none-any.whl
-          asset_name: horux_client-${{ steps.extract_version.outputs.version }}-py3-none-any.whl
+          asset_path: dist/horux_client-${{ needs.build-and-publish.outputs.version }}-py3-none-any.whl
+          asset_name: horux_client-${{ needs.build-and-publish.outputs.version }}-py3-none-any.whl
           asset_content_type: application/zip
 
       - name: Upload sdist to release
@@ -281,6 +279,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: dist/horux_client-${{ steps.extract_version.outputs.version }}.tar.gz
-          asset_name: horux_client-${{ steps.extract_version.outputs.version }}.tar.gz
+          asset_path: dist/horux_client-${{ needs.build-and-publish.outputs.version }}.tar.gz
+          asset_name: horux_client-${{ needs.build-and-publish.outputs.version }}.tar.gz
           asset_content_type: application/gzip
