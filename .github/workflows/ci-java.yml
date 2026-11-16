@@ -1,0 +1,254 @@
+name: 1 · CI — Java
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'java/**'
+      - '.github/workflows/ci-java.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'java/**'
+      - '.github/workflows/ci-java.yml'
+  workflow_call:
+
+# Least privilege by default; the jobs that publish or tag override this.
+permissions:
+  contents: read
+
+# Concurrency group: a LITERAL key, not ${ github.workflow }.
+#
+# Inside a workflow invoked with `uses:`, `github.workflow` is the CALLER's workflow
+# name, not this file's. With `${ github.workflow }-${ github.ref }` every component
+# workflow therefore computed the same group as ci-all.yml itself -- the group its own
+# caller already held, with cancel-in-progress: true -- so each call collided with its
+# parent and died at dispatch, producing no jobs and reporting `failure`. That made
+# "All CI Checks Passed" a gate that could never pass, on every commit and every PR.
+concurrency:
+  group: ci-java-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint & Format Check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./java
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Check code formatting
+        run: mvn spotless:check || echo "No spotless plugin configured"
+        continue-on-error: true
+
+      - name: Run Checkstyle
+        run: mvn checkstyle:check || echo "No checkstyle plugin configured"
+        continue-on-error: true
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./java
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build with Maven
+        run: mvn clean compile
+
+      - name: Verify package structure
+        run: |
+          echo "Checking compiled classes..."
+          ls -la target/classes/io/horux/client/
+          test -f target/classes/io/horux/client/HoruxClient.class || (echo "Missing HoruxClient.class" && exit 1)
+          test -f target/classes/io/horux/client/MetricsClient.class || (echo "Missing MetricsClient.class" && exit 1)
+          test -f target/classes/io/horux/client/LogsClient.class || (echo "Missing LogsClient.class" && exit 1)
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        java-version: ['11', '17', '21']
+    defaults:
+      run:
+        working-directory: ./java
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java ${{ matrix.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ matrix.java-version }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Run tests
+        run: mvn test || echo "No tests configured yet"
+        continue-on-error: true
+
+      - name: Generate coverage report
+        if: matrix.java-version == '11'
+        run: mvn jacoco:report || echo "No JaCoCo plugin configured"
+        continue-on-error: true
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@0f8570b1a125f4937846a11fcfa3bcd548bd8c97 # v4.6.0
+        if: matrix.java-version == '11' && always()
+        with:
+          files: ./java/target/site/jacoco/jacoco.xml
+          flags: java
+          name: java-coverage
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        continue-on-error: true
+
+  package:
+    name: Package JAR
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./java
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build package
+        run: mvn clean package -DskipTests
+
+      - name: Check artifacts
+        run: |
+          echo "Checking JAR artifacts..."
+          ls -la target/
+
+          # `test -f target/horux-client-*.jar` looks right and cannot work: the glob
+          # matches THREE files once the source and javadoc plugins run --
+          # horux-client-1.1.0.jar, -sources.jar and -javadoc.jar -- and `test -f` with
+          # three arguments is an error, so the `||` branch fired and reported a missing
+          # JAR for a JAR that had been built correctly. The job failed because the build
+          # produced more than it used to, which is the opposite of what it was checking
+          # for.
+          #
+          # Match the main artifact only, and name what was found so a future failure
+          # here says which half is wrong.
+          mapfile -t jars < <(find target -maxdepth 1 -name 'horux-client-*.jar' \
+              ! -name '*-sources.jar' ! -name '*-javadoc.jar' | sort)
+
+          if [ "${#jars[@]}" -eq 0 ]; then
+              echo "Missing JAR file: no target/horux-client-*.jar (excluding sources/javadoc)"
+              exit 1
+          fi
+
+          printf 'JAR file created successfully: %s\n' "${jars[@]}"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-jar
+          path: java/target/*.jar
+          retention-days: 7
+
+  package-validation:
+    name: Package Validation
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./java
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Validate POM
+        run: mvn help:effective-pom validate
+
+      - name: Check required metadata
+        run: |
+          echo "Validating pom.xml metadata..."
+          mvn help:effective-pom | grep -q "<groupId>io.horux</groupId>" || (echo "Missing groupId" && exit 1)
+          mvn help:effective-pom | grep -q "<artifactId>horux-client</artifactId>" || (echo "Missing artifactId" && exit 1)
+          mvn help:effective-pom | grep -q "<version>" || (echo "Missing version" && exit 1)
+          echo "POM validation passed"
+
+  dependency-check:
+    name: Dependency Vulnerability Check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./java
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Check for vulnerable dependencies
+        run: mvn dependency:analyze || echo "Dependency analysis informational only"
+        continue-on-error: true
+
+      - name: Run OWASP dependency check
+        run: mvn org.owasp:dependency-check-maven:check || echo "No OWASP plugin configured"
+        continue-on-error: true
+
+  all-checks:
+    name: All Java SDK Checks Passed
+    runs-on: ubuntu-latest
+    needs: [lint, build, test, package, package-validation, dependency-check]
+    if: always()
+    steps:
+      - name: Check all jobs
+        run: |
+          if [[ "${{ needs.lint.result }}" == "failure" || "${{ needs.lint.result }}" == "cancelled" ]] || \
+             [[ "${{ needs.build.result }}" == "failure" || "${{ needs.build.result }}" == "cancelled" ]] || \
+             [[ "${{ needs.test.result }}" == "failure" || "${{ needs.test.result }}" == "cancelled" ]] || \
+             [[ "${{ needs.package.result }}" == "failure" || "${{ needs.package.result }}" == "cancelled" ]] || \
+             [[ "${{ needs.package-validation.result }}" == "failure" || "${{ needs.package-validation.result }}" == "cancelled" ]]; then
+            echo "One or more checks failed"
+            exit 1
+          fi
+          # Note: dependency-check is not included in failure check as it's informational

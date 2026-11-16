@@ -1,0 +1,265 @@
+name: 2 · Publish — Python
+
+on:
+  push:
+    tags:
+      - 'python-v*.*.*'
+  workflow_call:
+    inputs:
+      version:
+        required: false
+        type: string
+      prerelease:
+        required: false
+        default: false
+        type: boolean
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (leave empty to use pyproject.toml version)'
+        required: false
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        default: false
+        type: boolean
+
+# Least privilege by default; the jobs that publish or tag override this.
+permissions:
+  contents: read
+
+jobs:
+  build-and-publish:
+    name: Build & Publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      version: ${{ steps.package_version.outputs.version }}
+
+    defaults:
+      run:
+        working-directory: ./python
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: python/pyproject.toml
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Extract version from tag
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        id: extract_version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG#python-v}
+          VERSION=${VERSION#python-sdk-v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Publishing version: $VERSION"
+
+      - name: Update package version (from tag)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        run: |
+          sed -i "s/^version = .*/version = \"${{ steps.extract_version.outputs.version }}\"/" pyproject.toml
+          grep "^version = " pyproject.toml
+
+      - name: Update package version (manual/called)
+        if: (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.version != ''
+        run: |
+          sed -i "s/^version = .*/version = \"${{ inputs.version }}\"/" pyproject.toml
+          grep "^version = " pyproject.toml
+
+      - name: Install package dependencies
+        run: pip install -e ".[dev]"
+
+      # Blocking, measured rather than assumed: mypy, ruff, black and pytest all exit 0 on
+      # this tree today. They used to be `|| echo ... continuing` AND
+      # `continue-on-error: true` -- swallowed twice, so a release published a failing SDK
+      # and said nothing.
+      - name: Run type checking
+        run: mypy horux_client/
+
+      - name: Run linting
+        run: |
+          black --check .
+          ruff check .
+
+      - name: Run tests
+        run: pytest -v
+
+      - name: Build package
+        run: python -m build
+
+      - name: Verify package
+        run: |
+          echo "Package contents:"
+          ls -la dist/
+          echo ""
+          echo "Checking package with twine:"
+          twine check dist/*
+
+      - name: Get package version
+        id: package_version
+        run: |
+          VERSION=$(grep -m1 '^version' pyproject.toml | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Publishing version: $VERSION"
+
+      # PyPI, which is the only registry that serves Python packages -- GitHub Packages has
+      # no PyPI support at all. This step used to upload to
+      # `https://nuget.pkg.github.com/<owner>`, the NuGet endpoint, behind
+      # `continue-on-error: true`: it could never have worked, and said nothing when it
+      # didn't. The flag is gone with it; a publish that fails must fail the release.
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TWINE_PASSWORD:-}" ]; then
+            echo "::error::PYPI_PUBLISH_TOKEN is not set, so this build cannot be published."
+            echo "::error::Add a PyPI API token as the repository secret PYPI_PUBLISH_TOKEN."
+            echo "::error::Refusing to report a release that published nothing."
+            exit 1
+          fi
+          twine upload dist/*
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-sdk-dist
+          path: python/dist/
+          retention-days: 30
+
+      - name: Create summary
+        run: |
+          VERSION="${{ steps.package_version.outputs.version }}"
+          REPO_OWNER="${{ github.repository_owner }}"
+
+          echo "## Python Package Published 📦" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Package**: \`horux-client\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Version**: \`${VERSION}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry**: GitHub Packages" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Installation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "pip install horux-client --index-url https://npm.pkg.github.com/${REPO_OWNER}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Download" >> $GITHUB_STEP_SUMMARY
+          echo "The wheel and sdist are also attached as build artifacts on this workflow run." >> $GITHUB_STEP_SUMMARY
+
+  create-github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: build-and-publish
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-sdk-dist
+          path: dist/
+
+      - name: Extract version from tag
+        id: extract_version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG#python-v}
+          VERSION=${VERSION#python-sdk-v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        id: create_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: Python SDK v${{ steps.extract_version.outputs.version }}
+          body: |
+            # Python SDK v${{ steps.extract_version.outputs.version }}
+
+            ## Installation
+
+            Download the wheel from the release assets below, then install:
+
+            ```bash
+            pip install horux_client-${{ steps.extract_version.outputs.version }}-py3-none-any.whl
+            ```
+
+            ## Quick Start
+
+            ```python
+            from horux_client import HoruxClient
+
+            client = HoruxClient(
+                api_token="your-api-token",
+                service_id="your-service-id"
+            )
+
+            # Push metrics
+            client.metrics.counter("http.requests.total", 1, {"method": "GET", "status": "200"})
+            client.metrics.gauge("response.time", 145.5, {"endpoint": "/api/users"})
+
+            # Push logs
+            client.logs.info("User logged in", {"user_id": "123", "ip": "192.168.1.1"})
+
+            # Flush and close
+            client.close()
+            ```
+
+            ## Changes
+
+            See the [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/python/CHANGELOG.md) for details.
+
+            ## Documentation
+
+            - [README](https://github.com/${{ github.repository }}/blob/main/python/README.md)
+
+            ## Supported Python Versions
+
+            - Python 3.8 – 3.12
+          draft: false
+          prerelease: ${{ inputs.prerelease || contains(steps.extract_version.outputs.version, 'alpha') || contains(steps.extract_version.outputs.version, 'beta') || contains(steps.extract_version.outputs.version, 'rc') }}
+
+      - name: Upload wheel to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: dist/horux_client-${{ steps.extract_version.outputs.version }}-py3-none-any.whl
+          asset_name: horux_client-${{ steps.extract_version.outputs.version }}-py3-none-any.whl
+          asset_content_type: application/zip
+
+      - name: Upload sdist to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: dist/horux_client-${{ steps.extract_version.outputs.version }}.tar.gz
+          asset_name: horux_client-${{ steps.extract_version.outputs.version }}.tar.gz
+          asset_content_type: application/gzip

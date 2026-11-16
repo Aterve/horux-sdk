@@ -1,0 +1,300 @@
+name: 1 · CI — Python
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'python/**'
+      - '.github/workflows/ci-python.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'python/**'
+      - '.github/workflows/ci-python.yml'
+  workflow_call:
+
+# Least privilege by default; the jobs that publish or tag override this.
+permissions:
+  contents: read
+
+# Concurrency group: a LITERAL key, not ${ github.workflow }.
+#
+# Inside a workflow invoked with `uses:`, `github.workflow` is the CALLER's workflow
+# name, not this file's. With `${ github.workflow }-${ github.ref }` every component
+# workflow therefore computed the same group as ci-all.yml itself -- the group its own
+# caller already held, with cancel-in-progress: true -- so each call collided with its
+# parent and died at dispatch, producing no jobs and reporting `failure`. That made
+# "All CI Checks Passed" a gate that could never pass, on every commit and every PR.
+concurrency:
+  group: ci-python-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint & Format Check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./python
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: python/pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[lint]"
+
+      - name: Run Black formatter check
+        run: black --check .
+
+      - name: Run Ruff linter
+        run: ruff check .
+
+  typecheck:
+    name: Type Check with MyPy
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./python
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: python/pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[lint]"
+
+      - name: Run MyPy type checker
+        run: mypy horux_client/
+
+  test:
+    name: Test
+    # The runner is per matrix leg, because `ubuntu-latest` migrated to Ubuntu 26.04 on
+    # 19 Oct 2026 and that image carries neither Python 3.8 nor 3.9:
+    # `The version '3.9' with architecture 'x64' was not found for Ubuntu 26.04`.
+    # This job had been red on every PR since the migration, for a reason that has nothing
+    # to do with the SDK.
+    #
+    # Which image has which, counted from actions/python-versions' own
+    # `versions-manifest.json` (linux x64) rather than guessed -- a first fix pinned only
+    # 3.8, and 3.9 then failed the same way:
+    #
+    #     3.8, 3.9      16.04 18.04 20.04 22.04 24.04
+    #     3.10          16.04 18.04 20.04 22.04 24.04 26.04
+    #     3.11, 3.12          18.04 20.04 22.04 24.04 26.04
+    #     3.13                      20.04 22.04 24.04 26.04
+    #
+    # So 3.8 and 3.9 go to 24.04 -- the newest image that still carries them, and therefore
+    # the one that will be retired last. They are pinned rather than dropped because
+    # `pyproject.toml` declares `requires-python = ">=3.8"` and ships 3.8 and 3.9
+    # classifiers: dropping a leg would leave a published support claim untested. Narrowing
+    # the claim is a release decision, not a CI fix.
+    #
+    # When 24.04 goes the way of 20.04, this choice comes back: narrow the claim, or test
+    # those interpreters another way.
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - python-version: '3.8'
+            runner: ubuntu-24.04
+          - python-version: '3.9'
+            runner: ubuntu-24.04
+          - python-version: '3.10'
+            runner: ubuntu-latest
+          - python-version: '3.11'
+            runner: ubuntu-latest
+          - python-version: '3.12'
+            runner: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./python
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+          cache-dependency-path: python/pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run tests with coverage
+        run: pytest -v --cov=horux_client --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@0f8570b1a125f4937846a11fcfa3bcd548bd8c97 # v4.6.0
+        if: matrix.python-version == '3.11' && always()
+        with:
+          files: ./python/coverage.xml
+          flags: python
+          name: python-coverage
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  build:
+    name: Build Package
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./python
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: python/pyproject.toml
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Build package
+        run: python -m build
+
+      - name: Check build artifacts
+        run: |
+          echo "Checking build output..."
+          ls -la dist/
+          echo "Verifying package structure..."
+          test -f dist/horux_client-*.whl || (echo "Missing wheel file" && exit 1)
+          test -f dist/horux_client-*.tar.gz || (echo "Missing source distribution" && exit 1)
+
+      - name: Check package with twine
+        run: twine check dist/*
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: python/dist/
+          retention-days: 7
+
+  package-check:
+    name: Package Validation
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./python
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: python/pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+
+      - name: Validate pyproject.toml
+        run: |
+          python -c "
+          import tomllib
+          with open('pyproject.toml', 'rb') as f:
+              config = tomllib.load(f)
+
+          project = config.get('project', {})
+          required = ['name', 'version', 'description', 'requires-python', 'dependencies']
+
+          for field in required:
+              if field not in project:
+                  print(f'Missing required field: {field}')
+                  exit(1)
+
+          print('pyproject.toml validation passed')
+          print(f'Package: {project[\"name\"]} v{project[\"version\"]}')
+          " || python -c "
+          # Fallback for Python < 3.11 (no tomllib)
+          import configparser
+          print('pyproject.toml validation skipped on Python < 3.11')
+          "
+
+      - name: Test package installation
+        run: |
+          python -m pip install .
+          python -c "import horux_client; print('Import successful:', horux_client.__version__)"
+
+  dependency-audit:
+    name: Dependency Vulnerability Audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./python
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: python/pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install pip-audit
+
+      - name: Run pip-audit
+        run: pip-audit
+        continue-on-error: true
+
+  all-checks:
+    name: All Python SDK Checks Passed
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, build, test, package-check, dependency-audit]
+    if: always()
+    steps:
+      - name: Check all jobs
+        run: |
+          if [[ "${{ needs.lint.result }}" == "failure" || "${{ needs.lint.result }}" == "cancelled" ]] || \
+             [[ "${{ needs.typecheck.result }}" == "failure" || "${{ needs.typecheck.result }}" == "cancelled" ]] || \
+             [[ "${{ needs.build.result }}" == "failure" || "${{ needs.build.result }}" == "cancelled" ]] || \
+             [[ "${{ needs.test.result }}" == "failure" || "${{ needs.test.result }}" == "cancelled" ]] || \
+             [[ "${{ needs.package-check.result }}" == "failure" || "${{ needs.package-check.result }}" == "cancelled" ]]; then
+            echo "One or more checks failed"
+            exit 1
+          fi
+          # Note: dependency-audit is not included in failure check as it's informational

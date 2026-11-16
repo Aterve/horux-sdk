@@ -1,0 +1,65 @@
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+
+linters:
+  disable-all: true
+  enable:
+    # Simple linters that don't require goanalysis
+    - gofmt         # Check formatting
+    - goimports     # Check import order and formatting
+    - misspell      # Find commonly misspelled English words
+    - unconvert     # Remove unnecessary type conversions
+    - gocyclo       # Cyclomatic complexity
+    - whitespace    # Detect leading/trailing whitespace
+    - ineffassign   # Detect ineffectual assignments
+    - errcheck      # Check for unchecked errors (works without goanalysis in most cases)
+
+linters-settings:
+  errcheck:
+    check-blank: false  # Allow explicit error ignoring with _ =
+    check-type-assertions: true
+
+  govet:
+    enable-all: true
+
+  gocyclo:
+    min-complexity: 15
+
+  gocognit:
+    min-complexity: 20
+
+  nestif:
+    min-complexity: 4
+
+  misspell:
+    locale: US
+
+  goimports:
+    local-prefixes: github.com/Aterve/horux-sdk/go
+
+  gosec:
+    excludes:
+      - G404  # Weak random number generator (acceptable for non-crypto use)
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  exclude-rules:
+    # Exclude some linters from running on tests files
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - errcheck
+        - gosec
+
+    # Allow package-level variables in SDK (client instances)
+    - path: client\.go
+      linters:
+        - gochecknoglobals
+
+output:
+  sort-results: true

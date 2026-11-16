@@ -1,0 +1,316 @@
+name: 2 · Publish — Go
+
+on:
+  push:
+    tags:
+      - 'go/v*.*.*'
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      prerelease:
+        required: false
+        default: false
+        type: boolean
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v1.2.3)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        default: false
+        type: boolean
+
+# Least privilege by default; the jobs that publish or tag override this.
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate Release
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./go
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache-dependency-path: go/go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Run tests
+        run: go test -v -race -count=1 ./...
+
+      - name: Build SDK
+        run: go build ./...
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Files not formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: validate
+    permissions:
+      contents: write
+
+    outputs:
+      version: ${{ steps.extract_version.outputs.version }}
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version
+        id: extract_version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            TAG=${GITHUB_REF#refs/tags/}
+            # Handle different tag formats
+            # go/v1.2.3 -> v1.2.3
+            # go-v1.2.3 -> v1.2.3
+            # go-sdk-v1.2.3 -> v1.2.3
+            VERSION=${TAG#go/}
+            VERSION=${VERSION#go-}
+            VERSION=${VERSION#go-sdk-}
+          fi
+
+          # Ensure version starts with 'v'
+          if [[ ! "$VERSION" =~ ^v ]]; then
+            VERSION="v${VERSION}"
+          fi
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Publishing version: $VERSION"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get the previous tag
+          PREV_TAG=$(git describe --abbrev=0 --tags $(git rev-list --tags --skip=1 --max-count=1) 2>/dev/null || echo "")
+
+          if [ -z "$PREV_TAG" ]; then
+            echo "No previous tag found, showing all commits"
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges)
+          else
+            echo "Generating changelog from $PREV_TAG to HEAD"
+            CHANGELOG=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+          fi
+
+          # Save changelog to file for multi-line handling
+          echo "$CHANGELOG" > /tmp/changelog.txt
+
+          # Also output for debugging
+          echo "Changelog:"
+          cat /tmp/changelog.txt
+
+      - name: Create release notes
+        id: release_notes
+        run: |
+          VERSION="${{ steps.extract_version.outputs.version }}"
+
+          cat > /tmp/release_notes.md <<EOF
+          # Go SDK ${VERSION}
+
+          ## Installation
+
+          \`\`\`bash
+          go get github.com/Aterve/horux-sdk/go@${VERSION}
+          \`\`\`
+
+          ## Usage
+
+          \`\`\`go
+          import "github.com/Aterve/horux-sdk/go"
+
+          client := horux.NewClient(horux.Config{
+              BaseURL: "https://ingestor.example.com",
+              TenantID: "your-tenant-id",
+              ServiceID: "your-service-id",
+          })
+          \`\`\`
+
+          ## Changes
+
+          EOF
+
+          # Append changelog
+          cat /tmp/changelog.txt >> /tmp/release_notes.md
+
+          cat >> /tmp/release_notes.md <<EOF
+
+          ## Documentation
+
+          - [README](https://github.com/${{ github.repository }}/blob/main/go/README.md)
+          - [Go Package Documentation](https://pkg.go.dev/github.com/Aterve/horux-sdk/go@${VERSION})
+
+          ## Compatibility
+
+          - **Go Version**: 1.21 or later
+          - **Platforms**: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64
+          EOF
+
+          echo "Release notes:"
+          cat /tmp/release_notes.md
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: go/${{ steps.extract_version.outputs.version }}
+          release_name: Go SDK ${{ steps.extract_version.outputs.version }}
+          body_path: /tmp/release_notes.md
+          draft: false
+          prerelease: ${{ inputs.prerelease || contains(steps.extract_version.outputs.version, 'alpha') || contains(steps.extract_version.outputs.version, 'beta') || contains(steps.extract_version.outputs.version, 'rc') }}
+
+  build-archives:
+    name: Build Release Archives
+    runs-on: ubuntu-latest
+    needs: create-release
+    permissions:
+      contents: write
+
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Create source archive
+        working-directory: ./go
+        run: |
+          VERSION="${{ needs.create-release.outputs.version }}"
+          ARCHIVE_NAME="go-horux-client-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}"
+
+          # Create archive directory
+          mkdir -p "/tmp/${ARCHIVE_NAME}"
+
+          # Copy source files
+          cp -r . "/tmp/${ARCHIVE_NAME}/"
+
+          # Remove unnecessary files
+          cd "/tmp/${ARCHIVE_NAME}"
+          rm -rf .git .github
+
+          # Create tarball
+          cd /tmp
+          tar -czf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
+
+          echo "Created archive: ${ARCHIVE_NAME}.tar.gz"
+          ls -lh "${ARCHIVE_NAME}.tar.gz"
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: /tmp/go-horux-client-${{ needs.create-release.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+          asset_name: go-horux-client-${{ needs.create-release.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+          asset_content_type: application/gzip
+
+  publish-summary:
+    name: Publish Summary
+    runs-on: ubuntu-latest
+    # `validate` was missing here, so the summary's "Validation:" line rendered empty
+    # (actionlint: property "validate" is not defined in object type ...).
+    needs: [validate, create-release, build-archives]
+    if: always()
+
+    steps:
+      - name: Create summary
+        run: |
+          VERSION="${{ needs.create-release.outputs.version }}"
+
+          echo "## Go SDK Release Published 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version**: \`${VERSION}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Module**: \`github.com/Aterve/horux-sdk/go\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Installation" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "go get github.com/Aterve/horux-sdk/go@${VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Import in your code" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`go" >> $GITHUB_STEP_SUMMARY
+          echo 'import "github.com/Aterve/horux-sdk/go"' >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Documentation" >> $GITHUB_STEP_SUMMARY
+          echo "- [Go Package Docs](https://pkg.go.dev/github.com/Aterve/horux-sdk/go@${VERSION})" >> $GITHUB_STEP_SUMMARY
+          echo "- [Release Notes](https://github.com/${{ github.repository }}/releases/tag/go/${VERSION})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Status" >> $GITHUB_STEP_SUMMARY
+          echo "- Validation: \`${{ needs.validate.result }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Release: \`${{ needs.create-release.result }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Archives: \`${{ needs.build-archives.result }}\`" >> $GITHUB_STEP_SUMMARY
+
+  notify-goproxy:
+    name: Notify Go Proxy
+    runs-on: ubuntu-latest
+    needs: create-release
+
+    steps:
+      - name: Trigger Go proxy cache refresh
+        run: |
+          VERSION="${{ needs.create-release.outputs.version }}"
+          MODULE="github.com/Aterve/horux-sdk/go"
+
+          echo "Notifying Go proxy to fetch new version..."
+
+          # Trigger proxy.golang.org to fetch the new version
+          curl -f "https://proxy.golang.org/${MODULE}/@v/${VERSION}.info" || echo "Go proxy notification sent"
+
+          # Also trigger sum.golang.org
+          curl -f "https://sum.golang.org/lookup/${MODULE}@${VERSION}" || echo "Go sum notification sent"
+
+          echo "Go module ${MODULE}@${VERSION} should be available shortly on pkg.go.dev"

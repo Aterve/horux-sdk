@@ -1,0 +1,114 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "horux-client"
+version = "1.1.0"
+description = "Official Python client library for Horux monitoring platform"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+    {name = "Aterve", email = "support@aterve.com"}
+]
+keywords = ["monitoring", "metrics", "logs", "observability", "telemetry"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Monitoring",
+    "Topic :: System :: Logging",
+]
+dependencies = [
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+# What the TEST matrix needs, and nothing more. The matrix runs 3.8 through 3.12, and
+# current black/ruff/mypy publish no wheels for 3.8 at all -- putting them here made
+# `pip install -e ".[dev]"` unresolvable on that leg and failed the job before a single
+# test ran. Formatters are not test dependencies; they live in [lint] below.
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "types-requests>=2.31.0",
+]
+
+# The lint and typecheck jobs only, which both pin Python 3.11.
+#
+# Pinned, not floating. These three decide whether CI is green, so an upstream release
+# must not be able to turn an untouched commit red -- which is exactly what happened:
+# `ruff>=0.1.0` resolved to 0.17.0, whose default rule set is far broader than when that
+# constraint was written, and `black>=23.0.0` to 26.x, whose formatting differs. 188
+# findings appeared on code nobody had touched. Bump these deliberately, in a commit that
+# also carries whatever they then ask for.
+lint = [
+    "black==26.10.1",
+    "mypy==1.18.2",
+    "ruff==0.17.0",
+    "types-requests>=2.31.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Aterve/horux-sdk"
+Documentation = "https://github.com/Aterve/horux-sdk/tree/main/python"
+Repository = "https://github.com/Aterve/horux-sdk"
+"Bug Tracker" = "https://github.com/Aterve/horux-sdk/issues"
+
+[tool.setuptools.packages.find]
+include = ["horux_client*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py38", "py39", "py310", "py311", "py312"]
+
+[tool.mypy]
+# 3.9 is no longer accepted by current mypy ("must be 3.10 or higher"), and the warning
+# it printed was one release away from being an error.
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+
+# Ruff's default rule set grows with every release, and `ruff>=0.1.0` in the dev extras
+# meant CI resolved to whatever was newest. Between the version this file was written
+# against and 0.17.0 that difference was 188 findings on code nobody had touched — a lint
+# gate that fails for reasons unrelated to the change is not a gate. The versions are now
+# pinned in [project.optional-dependencies], and the exceptions below are per-path and
+# carry their reason, rather than a blanket `select` that would hide real findings.
+[tool.ruff.lint.per-file-ignores]
+# PLE1205 is a FALSE POSITIVE on this SDK, everywhere it appears. The rule assumes any
+# `.info()`/`.warning()`/`.error()` call is stdlib logging with a printf format string.
+# `client.logs.info(message, fields)` is this SDK's own structured-logging API and the
+# second argument is a dict of fields, not format arguments. Taking the rule at its word
+# and "fixing" these calls would break working examples.
+"examples/*" = ["PLE1205"]
+"test_auth.py" = ["PLE1205", "BLE001"]
+# Standalone operator scripts, not library code: a top-level `except Exception` that
+# prints and exits non-zero is the correct shape for a script a human runs, and narrowing
+# it buys nothing. BLE001 stays enforced inside horux_client/, where it found two real
+# sites — one narrowed to OSError, one documented at the catch.
+"create_test_token.py" = ["BLE001"]
+"random_ingestion.py" = ["BLE001"]
+# RUF012 wants ClassVar on a mutable class attribute. In a test fixture holding a list of
+# recorded calls that is noise, not safety.
+"tests/*" = ["RUF012"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--cov=horux_client --cov-report=html --cov-report=term-missing"

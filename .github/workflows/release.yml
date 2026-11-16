@@ -1,0 +1,168 @@
+name: 3 · Release — SDKs (manual)
+
+# The single entry point. Pick a language (or all four) and a version; this calls that
+# language's publish workflow, which builds, publishes to its registry, and creates the
+# GitHub Release — and the Release is what creates the git tag.
+#
+# WHY THIS PUSHES NO TAGS ITSELF
+#
+# A tag pushed with the built-in GITHUB_TOKEN triggers no workflow at all ("with the
+# exception of workflow_dispatch and repository_dispatch, other GITHUB_TOKEN-triggered
+# events do not create workflow runs"), so a release that worked by pushing tags would need
+# a PAT and would fail silently without one. Calling the publish workflows directly removes
+# the question: the work happens inside this run, and the tag is a record of it rather than
+# the trigger for it.
+#
+# The Go module is the one place the tag format is not free. It lives in `go/`, so its
+# version tags MUST be `go/vX.Y.Z` — that is how the module proxy finds a module in a
+# subdirectory. publish-go.yml creates exactly that.
+
+on:
+  workflow_dispatch:
+    inputs:
+      component:
+        description: 'Which SDK to release'
+        required: true
+        type: choice
+        options:
+          - go
+          - typescript
+          - python
+          - java
+          - all
+      version:
+        description: 'Version (e.g. 1.2.3 or v1.2.3)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as pre-release (alpha, beta, rc)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-version:
+    name: Validate Version
+    runs-on: ubuntu-latest
+    outputs:
+      with_v: ${{ steps.normalize.outputs.with_v }}
+      without_v: ${{ steps.normalize.outputs.without_v }}
+    steps:
+      - name: Normalize and validate
+        id: normalize
+        run: |
+          set -euo pipefail
+          VERSION='${{ inputs.version }}'
+          WITHOUT_V="${VERSION#v}"
+          if ! [[ "$WITHOUT_V" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::error::'$VERSION' is not X.Y.Z or X.Y.Z-suffix"
+            exit 1
+          fi
+          echo "without_v=$WITHOUT_V" >> "$GITHUB_OUTPUT"
+          echo "with_v=v$WITHOUT_V"   >> "$GITHUB_OUTPUT"
+          echo "Releasing $WITHOUT_V"
+
+  # Each call job grants what its callee asks for. A called workflow may request
+  # permissions only equal to or NARROWER than the calling job's, and a job with no
+  # `permissions:` inherits the workflow-level `contents: read` above -- which would make
+  # every publish job's request impossible and take the WHOLE RUN down before any job
+  # starts (`startup_failure`, no annotation, no log). scripts/check-workflow-permissions.mjs
+  # checks this in CI; it exists because that failure already cost a day elsewhere.
+  go:
+    name: Release Go
+    needs: validate-version
+    if: inputs.component == 'go' || inputs.component == 'all'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/publish-go.yml
+    secrets: inherit
+    with:
+      version: ${{ needs.validate-version.outputs.with_v }}
+      prerelease: ${{ inputs.prerelease }}
+
+  typescript:
+    name: Release TypeScript
+    needs: validate-version
+    if: inputs.component == 'typescript' || inputs.component == 'all'
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/publish-typescript.yml
+    secrets: inherit
+    with:
+      version: ${{ needs.validate-version.outputs.without_v }}
+      prerelease: ${{ inputs.prerelease }}
+
+  python:
+    name: Release Python
+    needs: validate-version
+    if: inputs.component == 'python' || inputs.component == 'all'
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/publish-python.yml
+    secrets: inherit
+    with:
+      version: ${{ needs.validate-version.outputs.without_v }}
+      prerelease: ${{ inputs.prerelease }}
+
+  java:
+    name: Release Java
+    needs: validate-version
+    if: inputs.component == 'java' || inputs.component == 'all'
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/publish-java.yml
+    secrets: inherit
+    with:
+      version: ${{ needs.validate-version.outputs.without_v }}
+      prerelease: ${{ inputs.prerelease }}
+
+  summary:
+    name: Release Summary
+    runs-on: ubuntu-latest
+    needs: [validate-version, go, typescript, python, java]
+    if: always()
+    steps:
+      - name: Summarise
+        run: |
+          V='${{ needs.validate-version.outputs.without_v }}'
+          {
+            echo "## Release $V"
+            echo
+            echo "| SDK | Result | Consume |"
+            echo "|---|---|---|"
+            echo "| Go | \`${{ needs.go.result }}\` | \`go get github.com/Aterve/horux-sdk/go@v$V\` |"
+            echo "| TypeScript | \`${{ needs.typescript.result }}\` | \`npm i @aterve/horux-client@$V\` |"
+            echo "| Python | \`${{ needs.python.result }}\` | \`pip install horux-client==$V\` |"
+            echo "| Java | \`${{ needs.java.result }}\` | \`io.horux:horux-client:$V\` |"
+            echo
+            echo "A \`skipped\` row means this release did not include that SDK."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  all-checks:
+    name: Release Succeeded
+    runs-on: ubuntu-latest
+    needs: [go, typescript, python, java]
+    if: always()
+    steps:
+      - name: Fail on failure or cancellation, accept skipped
+        # `!= "success"` would fail on a deliberately skipped SDK, which is every release
+        # that is not `all`. Fail only on real failures.
+        run: |
+          for r in '${{ needs.go.result }}' '${{ needs.typescript.result }}' \
+                   '${{ needs.python.result }}' '${{ needs.java.result }}'; do
+            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
+              echo "::error::at least one SDK release failed"
+              exit 1
+            fi
+          done
+          echo "No SDK release failed."

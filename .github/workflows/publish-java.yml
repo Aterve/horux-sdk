@@ -1,0 +1,263 @@
+name: 2 · Publish — Java
+
+on:
+  push:
+    tags:
+      - 'java-v*.*.*'
+  workflow_call:
+    inputs:
+      version:
+        required: false
+        type: string
+      prerelease:
+        required: false
+        default: false
+        type: boolean
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g., 1.0.0)'
+        required: false
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        default: false
+        type: boolean
+
+# Least privilege by default; the jobs that publish or tag override this.
+permissions:
+  contents: read
+
+jobs:
+  publish-github-packages:
+    name: Publish to GitHub Packages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+
+    defaults:
+      run:
+        working-directory: ./java
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: 'maven'
+          server-id: github
+          server-username: GITHUB_ACTOR
+          server-password: GITHUB_TOKEN
+
+      - name: Extract version from tag
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        id: extract_version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG#java-v}
+          VERSION=${VERSION#java-sdk-v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Publishing version: $VERSION"
+
+      - name: Update POM version (from tag)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        run: |
+          mvn versions:set -DnewVersion=${{ steps.extract_version.outputs.version }}
+          mvn versions:commit
+
+      - name: Update POM version (manual/called)
+        if: (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.version != ''
+        run: |
+          mvn versions:set -DnewVersion=${{ inputs.version }}
+          mvn versions:commit
+
+      # Blocking. The `|| echo "No tests configured, skipping..."` this replaces was simply
+      # untrue -- src/test/java holds 4 test classes (TransportTest, HoruxConfigTest,
+      # WireFormatTest and one more) -- and it sat behind continue-on-error as well, so a
+      # failing suite published anyway. Not verified locally: there is no Maven on the
+      # machine this was moved with, so CI is the first run of it.
+      - name: Run tests
+        run: mvn test
+
+      - name: Build package
+        run: mvn clean package -DskipTests
+
+      - name: Publish to GitHub Packages
+        run: mvn deploy -DskipTests
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get published version
+        id: get_version
+        run: |
+          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Published version: $VERSION"
+
+      - name: Create summary
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          REPO_OWNER="${{ github.repository_owner }}"
+
+          echo "## GitHub Packages Published 📦" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Group ID**: \`io.horux\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Artifact ID**: \`horux-client\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Version**: \`${VERSION}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry**: GitHub Packages" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Maven Installation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**1. Add GitHub Packages repository to your pom.xml:**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`xml" >> $GITHUB_STEP_SUMMARY
+          echo "<repositories>" >> $GITHUB_STEP_SUMMARY
+          echo "    <repository>" >> $GITHUB_STEP_SUMMARY
+          echo "        <id>github</id>" >> $GITHUB_STEP_SUMMARY
+          echo "        <url>https://maven.pkg.github.com/${REPO_OWNER}/horux-sdk</url>" >> $GITHUB_STEP_SUMMARY
+          echo "    </repository>" >> $GITHUB_STEP_SUMMARY
+          echo "</repositories>" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**2. Add dependency:**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`xml" >> $GITHUB_STEP_SUMMARY
+          echo "<dependency>" >> $GITHUB_STEP_SUMMARY
+          echo "    <groupId>io.horux</groupId>" >> $GITHUB_STEP_SUMMARY
+          echo "    <artifactId>horux-client</artifactId>" >> $GITHUB_STEP_SUMMARY
+          echo "    <version>${VERSION}</version>" >> $GITHUB_STEP_SUMMARY
+          echo "</dependency>" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Gradle Installation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`gradle" >> $GITHUB_STEP_SUMMARY
+          echo "repositories {" >> $GITHUB_STEP_SUMMARY
+          echo "    maven {" >> $GITHUB_STEP_SUMMARY
+          echo "        url = uri(\"https://maven.pkg.github.com/${REPO_OWNER}/horux-sdk\")" >> $GITHUB_STEP_SUMMARY
+          echo "        credentials {" >> $GITHUB_STEP_SUMMARY
+          echo "            username = project.findProperty(\"gpr.user\") ?: System.getenv(\"USERNAME\")" >> $GITHUB_STEP_SUMMARY
+          echo "            password = project.findProperty(\"gpr.key\") ?: System.getenv(\"TOKEN\")" >> $GITHUB_STEP_SUMMARY
+          echo "        }" >> $GITHUB_STEP_SUMMARY
+          echo "    }" >> $GITHUB_STEP_SUMMARY
+          echo "}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "implementation 'io.horux:horux-client:${VERSION}'" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Package URL" >> $GITHUB_STEP_SUMMARY
+          echo "https://github.com/${{ github.repository }}/packages" >> $GITHUB_STEP_SUMMARY
+
+  create-github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: publish-github-packages
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: extract_version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG#java-v}
+          VERSION=${VERSION#java-sdk-v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: Java SDK v${{ steps.extract_version.outputs.version }}
+          body: |
+            # Java SDK v${{ steps.extract_version.outputs.version }}
+
+            ## Installation from GitHub Packages
+
+            **1. Add repository to pom.xml:**
+            ```xml
+            <repositories>
+                <repository>
+                    <id>github</id>
+                    <url>https://maven.pkg.github.com/${{ github.repository_owner }}/horux-sdk</url>
+                </repository>
+            </repositories>
+            ```
+
+            **2. Configure authentication in ~/.m2/settings.xml:**
+            ```xml
+            <servers>
+                <server>
+                    <id>github</id>
+                    <username>YOUR_GITHUB_USERNAME</username>
+                    <password>YOUR_GITHUB_TOKEN</password>
+                </server>
+            </servers>
+            ```
+
+            **3. Add dependency:**
+            ```xml
+            <dependency>
+                <groupId>io.horux</groupId>
+                <artifactId>horux-client</artifactId>
+                <version>${{ steps.extract_version.outputs.version }}</version>
+            </dependency>
+            ```
+
+            ## Quick Start
+
+            ```java
+            import io.horux.client.*;
+
+            HoruxConfig config = HoruxConfig.builder()
+                .apiToken(System.getenv("HORUX_API_TOKEN"))
+                .serviceId(System.getenv("HORUX_SERVICE_ID"))
+                .build();
+
+            try (HoruxClient client = new HoruxClient(config)) {
+                // Send metrics
+                client.metrics.counter("http.requests.total", 1,
+                    Map.of("method", "GET", "status", "200"));
+
+                // Send logs
+                client.logs.info("User logged in",
+                    Map.of("userId", "123", "ip", "192.168.1.1"));
+            }
+            ```
+
+            ## GitHub Package
+
+            https://github.com/${{ github.repository }}/packages
+
+            ## Changes
+
+            See the [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/java/CHANGELOG.md) for details.
+
+            ## Documentation
+
+            - [README](https://github.com/${{ github.repository }}/blob/main/java/README.md)
+            - [GitHub Packages Guide](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-apache-maven-registry)
+
+            ## Supported Java Versions
+
+            - Java 11 (minimum required)
+            - Java 17
+            - Java 21
+          draft: false
+          prerelease: ${{ inputs.prerelease || contains(steps.extract_version.outputs.version, 'alpha') || contains(steps.extract_version.outputs.version, 'beta') || contains(steps.extract_version.outputs.version, 'rc') }}

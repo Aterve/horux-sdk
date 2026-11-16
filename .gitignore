@@ -1,0 +1,32 @@
+# --- Go ---
+go/*.test
+go/coverage.out
+go/coverage.html
+
+# --- TypeScript ---
+typescript/node_modules/
+typescript/dist/
+typescript/*.tgz
+typescript/coverage/
+
+# --- Python ---
+python/.venv/
+python/build/
+python/dist/
+python/htmlcov/
+python/.coverage
+python/.pytest_cache/
+python/.mypy_cache/
+python/.ruff_cache/
+python/*.egg-info/
+**/__pycache__/
+*.py[cod]
+
+# --- Java ---
+java/target/
+
+# --- editors / OS ---
+.DS_Store
+.idea/
+.vscode/
+*.swp

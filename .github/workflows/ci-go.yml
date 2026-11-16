@@ -1,0 +1,184 @@
+name: 1 · CI — Go
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'go/**'
+      - '.github/workflows/ci-go.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'go/**'
+      - '.github/workflows/ci-go.yml'
+  workflow_call:
+
+# Least privilege by default; the jobs that publish or tag override this.
+permissions:
+  contents: read
+
+# Concurrency group: a LITERAL key, not ${ github.workflow }.
+#
+# Inside a workflow invoked with `uses:`, `github.workflow` is the CALLER's workflow
+# name, not this file's. With `${ github.workflow }-${ github.ref }` every component
+# workflow therefore computed the same group as ci-all.yml itself -- the group its own
+# caller already held, with cancel-in-progress: true -- so each call collided with its
+# parent and died at dispatch, producing no jobs and reporting `failure`. That made
+# "All CI Checks Passed" a gate that could never pass, on every commit and every PR.
+concurrency:
+  group: ci-go-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint & Format Check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./go
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Run go fmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.55.2
+
+      - name: Run golangci-lint
+        run: $(go env GOPATH)/bin/golangci-lint run --timeout=5m
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # 1.25 added: services/data-ingestor/Dockerfile builds with golang:1.25-alpine
+        # and go.mod there has `replace ... => ../../go`, so production
+        # compiled this SDK under a toolchain CI never exercised. Tests pass on 1.26
+        # locally, so this is coverage CI was simply missing.
+        go-version: ['1.21', '1.22', '1.23', '1.25']
+    defaults:
+      run:
+        working-directory: ./go
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test -v -race -count=1 -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@0f8570b1a125f4937846a11fcfa3bcd548bd8c97 # v4.6.0
+        if: matrix.go-version == '1.21'
+        with:
+          files: ./go/coverage.out
+          flags: go
+          name: go-coverage
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  build:
+    name: Build Examples
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./go
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify module
+        run: go mod verify
+
+      - name: Build SDK (dry run)
+        run: go build ./...
+
+      - name: Check for example code
+        run: |
+          if [ -d "examples" ]; then
+            echo "Building examples..."
+            for example in examples/*; do
+              if [ -f "$example/main.go" ]; then
+                echo "Building $example..."
+                cd "$example" && go build . && cd ../..
+              fi
+            done
+          else
+            echo "No examples directory found"
+          fi
+
+  dependency-check:
+    name: Dependency Vulnerability Check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./go
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: govulncheck ./...
+        continue-on-error: true
+
+  all-checks:
+    name: All Go SDK Checks Passed
+    runs-on: ubuntu-latest
+    needs: [lint, test, build, dependency-check]
+    if: always()
+    steps:
+      - name: Check all jobs
+        run: |
+          if [[ "${{ needs.lint.result }}" == "failure" || "${{ needs.lint.result }}" == "cancelled" ]] || \
+             [[ "${{ needs.test.result }}" == "failure" || "${{ needs.test.result }}" == "cancelled" ]] || \
+             [[ "${{ needs.build.result }}" == "failure" || "${{ needs.build.result }}" == "cancelled" ]]; then
+            echo "One or more checks failed"
+            exit 1
+          fi
+          # Note: dependency-check is not included in failure check as it's informational

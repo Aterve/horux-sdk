@@ -1,0 +1,252 @@
+name: 2 · Publish — TypeScript
+
+on:
+  push:
+    tags:
+      - 'typescript-v*.*.*'
+  workflow_call:
+    inputs:
+      version:
+        required: false
+        type: string
+      prerelease:
+        required: false
+        default: false
+        type: boolean
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (leave empty to use package.json version)'
+        required: false
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        default: false
+        type: boolean
+
+# Least privilege by default; the jobs that publish or tag override this.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.package_version.outputs.version }}
+
+    defaults:
+      run:
+        working-directory: ./typescript
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: typescript/package-lock.json
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run type checking
+        run: npx tsc --noEmit
+
+      - name: Build SDK
+        run: npm run build
+
+      # A published release must not be untested. Same false comment as in
+      # ci-sdk-typescript.yml; 24 real tests exist and pass.
+      - name: Run tests
+        run: npm test
+
+      - name: Extract version from tag
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        id: extract_version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG#typescript-v}
+          VERSION=${VERSION#ts-sdk-v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Publishing version: $VERSION"
+
+      - name: Update package version (from tag)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        run: |
+          npm version ${{ steps.extract_version.outputs.version }} --no-git-tag-version --allow-same-version
+          cat package.json | grep version
+
+      - name: Update package version (manual/called)
+        if: (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.version != ''
+        run: |
+          npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+          cat package.json | grep version
+
+      - name: Get package version
+        id: package_version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Verify package contents
+        run: |
+          echo "Package contents:"
+          npm pack --dry-run
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdk-build
+          path: |
+            typescript/dist/
+            typescript/package.json
+            typescript/README.md
+          retention-days: 1
+
+  publish-github-packages:
+    name: Publish to GitHub Packages
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+      packages: write
+
+    defaults:
+      run:
+        working-directory: ./typescript
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: sdk-build
+          path: typescript/
+
+      # npmjs, not GitHub Packages: a package on GitHub Packages needs authentication to
+      # INSTALL, which is the wrong shape for a public client SDK.
+      - name: Setup Node.js for npmjs
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          scope: '@aterve'
+
+      # The step that used to sit here ran
+      #   sed -i 's/"name": "@horus\/client"/"name": "@aterve\/horux-client"/' package.json
+      # against a package already called `@aterve/horux-client`, so it matched nothing and
+      # renamed nothing. Deleted rather than kept: the name belongs in package.json, and a
+      # substitution that silently no-ops is worse than no substitution.
+
+      - name: Update version
+        run: |
+          npm version ${{ needs.build.outputs.version }} --no-git-tag-version --allow-same-version
+
+      # `--access public` because a scoped package defaults to restricted, and the first
+      # publish of a scope is where that bites.
+      - name: Publish to npmjs
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::NPM_PUBLISH_TOKEN is not set, so this build cannot be published."
+            echo "::error::Add an npm automation token as the repository secret NPM_PUBLISH_TOKEN."
+            exit 1
+          fi
+          npm publish --ignore-scripts --access public
+
+      - name: Create GitHub Packages summary
+        run: |
+          VERSION="${{ needs.build.outputs.version }}"
+          REPO_OWNER="${{ github.repository_owner }}"
+          echo "## GitHub Package Published 📦" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Package**: \`@${REPO_OWNER}/horux-client\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Version**: \`${VERSION}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry**: GitHub Packages" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Installation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "# Add to .npmrc:" >> $GITHUB_STEP_SUMMARY
+          echo "@${REPO_OWNER}:registry=https://npm.pkg.github.com" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "npm install @${REPO_OWNER}/horux-client@${VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+  create-github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build, publish-github-packages]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: TypeScript SDK v${{ needs.build.outputs.version }}
+          body: |
+            # TypeScript SDK v${{ needs.build.outputs.version }}
+
+            ## Installation
+
+            Add to your `.npmrc`:
+            ```
+            @${{ github.repository_owner }}:registry=https://npm.pkg.github.com
+            ```
+
+            Then install:
+            ```bash
+            npm install @${{ github.repository_owner }}/horux-client@${{ needs.build.outputs.version }}
+            ```
+
+            ## Quick Start
+
+            ```typescript
+            import { HoruxClient } from '@aterve/horux-client';
+
+            const client = new HoruxClient({
+              apiToken: process.env.HORUX_API_TOKEN,
+              serviceId: process.env.HORUX_SERVICE_ID,
+            });
+
+            // Send metrics
+            client.metrics.counter('http.requests.total', 1, { method: 'GET', status: '200' });
+            client.metrics.gauge('response.time', 145.5, { endpoint: '/api/users' });
+
+            // Send logs
+            client.logs.info('User logged in', { userId: '123', ip: '192.168.1.1' });
+
+            // Flush and close
+            await client.close();
+            ```
+
+            ## GitHub Package
+
+            https://github.com/${{ github.repository }}/packages
+
+            ## Changes
+
+            See the [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/typescript/CHANGELOG.md) for details.
+
+            ## Documentation
+
+            - [README](https://github.com/${{ github.repository }}/blob/main/typescript/README.md)
+          draft: false
+          prerelease: ${{ inputs.prerelease || contains(needs.build.outputs.version, 'alpha') || contains(needs.build.outputs.version, 'beta') || contains(needs.build.outputs.version, 'rc') }}
