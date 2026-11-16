@@ -51,6 +51,9 @@ Tag formats differ for one reason worth knowing: the Go module lives in `go/`, s
 version tags **must** be `go/vX.Y.Z` — that is how the Go module proxy finds a module in a
 subdirectory. The others are `<language>-vX.Y.Z`.
 
+[`docs/publishing.md`](docs/publishing.md) is the long form: per-language detail, version
+policy, verification steps and the failure modes each workflow has actually hit.
+
 Secrets the publish workflows need, as repository secrets:
 
 | Secret | Used by | Without it |
