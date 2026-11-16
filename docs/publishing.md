@@ -9,7 +9,9 @@ This guide covers publishing the Horux client SDKs to their respective package r
 >    publishing (OIDC)** — no npm token, provenance automatic, and the trusted publisher on
 >    npmjs must name `release.yml` because npm validates the *calling* workflow. Python
 >    publishes to **PyPI** by trusted publishing as well (no token at all — PyPI's pending
->    publisher creates the project on first use), not GitHub The Python workflow previously uploaded to `nuget.pkg.github.com` — the
+>    publisher creates the project on first use), configured against
+>    `publish-python.yml`, which `release.yml` DISPATCHES rather than calls because PyPI
+>    does not support reusable workflows — not GitHub The Python workflow previously uploaded to `nuget.pkg.github.com` — the
 >    NuGet endpoint — behind `continue-on-error`, so it had never published anything.
 >    Java is still on GitHub Packages and is the one SDK that needs authentication to
 >    consume; moving it to Maven Central is an open task.

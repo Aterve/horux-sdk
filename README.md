@@ -77,7 +77,7 @@ Register it at [pypi.org/manage/account/publishing](https://pypi.org/manage/acco
 | PyPI project name | `horux-client` |
 | Owner | `Aterve` |
 | Repository name | `horux-sdk` |
-| Workflow name | `release.yml` |
+| Workflow name | **`publish-python.yml`** |
 | Environment | *(optional; PyPI recommends one with manual approvers)* |
 
 A pending publisher does **not** reserve the name — if someone else registers `horux-client`
@@ -87,12 +87,26 @@ The upload uses `pypa/gh-action-pypi-publish`, pinned by commit SHA, which perfo
 exchange itself. `packages-dir` is `python/dist`, because an action's paths resolve against
 the workspace and not against the job's `working-directory` — an easy and silent mistake.
 
-⚠️ **PyPI's docs do not say which filename to configure when the publish job lives in a
-reusable workflow.** PyPI matches the OIDC `workflow_ref` claim, and GitHub sets that to the
-workflow that *started* the run, which is `release.yml` — so that is what the table above
-says. Rather than leave it to inference, the workflow prints `github.workflow_ref` just
-before uploading, so the first release shows you the exact value PyPI will compare against.
-A mismatch is a clear 403 from PyPI naming the claims it received, not a silent no-op.
+⚠️ **`publish-python.yml`, not `release.yml` — and that is why Python is the one SDK
+release.yml dispatches rather than calls.** PyPI's trusted publishing does **not support
+reusable workflows at all**:
+
+> Reusable workflows are **not currently supported**
+> — [PyPI troubleshooting](https://docs.pypi.org/trusted-publishers/troubleshooting/#reusable-workflows-on-github),
+> a practical limitation tracked in [warehouse#11096](https://github.com/pypi/warehouse/issues/11096)
+
+A `uses:` call fails with `invalid-publisher: valid token, but no corresponding publisher
+(Publisher with matching claims was not found)`. Measured on the first Python release
+attempt — and note PyPI's main docs never mention it; the upload action is what says so.
+
+So the OIDC exchange has to happen in a workflow that was *triggered*. `publish-python.yml`
+is `workflow_dispatch`-only, and `release.yml`'s Python job dispatches it and then waits on
+the result with `gh run watch --exit-status`, which works because `workflow_dispatch` is an
+explicit exception to the rule that GITHUB_TOKEN-driven events start no workflows. One human
+entry point is preserved; the publishing identity is the dispatched workflow.
+
+npm is unaffected: it *does* support the reusable case, matching the calling workflow —
+which is why the two SDKs are configured with different filenames.
 
 #### npm trusted publishing
 

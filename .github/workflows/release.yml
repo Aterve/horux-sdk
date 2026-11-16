@@ -107,20 +107,54 @@ jobs:
       version: ${{ needs.validate-version.outputs.without_v }}
       prerelease: ${{ inputs.prerelease }}
 
+  # DISPATCHED, not called, and alone among the four in that -- because PyPI's trusted
+  # publishing does not support reusable workflows at all
+  # (docs.pypi.org/trusted-publishers/troubleshooting, pypi/warehouse#11096). A `uses:`
+  # call fails with `invalid-publisher ... no corresponding publisher`, which is how this
+  # was found. `workflow_dispatch` is an explicit exception to the rule that
+  # GITHUB_TOKEN-driven events start no workflows, so this job can trigger it and then wait
+  # on the result rather than firing and forgetting.
   python:
     name: Release Python
+    runs-on: ubuntu-latest
     needs: validate-version
     if: inputs.component == 'python' || inputs.component == 'all'
     permissions:
-      contents: write
-      # PyPI trusted publishing, same shape as the TypeScript job above: the OIDC token is
-      # the credential, and the claim PyPI matches names THIS workflow's filename.
-      id-token: write
-    uses: ./.github/workflows/publish-python.yml
-    secrets: inherit
-    with:
-      version: ${{ needs.validate-version.outputs.without_v }}
-      prerelease: ${{ inputs.prerelease }}
+      actions: write
+    steps:
+      - name: Dispatch publish-python.yml and wait for it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.validate-version.outputs.without_v }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          WF=publish-python.yml
+          # Recorded before dispatching so the poll below cannot adopt an older run.
+          SINCE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          gh workflow run "$WF" --ref "${{ github.ref_name }}" \
+            -f version="$VERSION" -f prerelease="$PRERELEASE"
+          echo "dispatched $WF (version=$VERSION, prerelease=$PRERELEASE)"
+
+          RUN=""
+          for _ in $(seq 1 30); do
+            sleep 5
+            RUN="$(gh run list --workflow "$WF" --limit 20 \
+                     --json databaseId,createdAt,event \
+                     --jq "[.[] | select(.event==\"workflow_dispatch\" and .createdAt >= \"$SINCE\")]
+                           | sort_by(.createdAt) | last | .databaseId // empty")"
+            [ -n "$RUN" ] && break
+          done
+          if [ -z "$RUN" ]; then
+            echo "::error::dispatched $WF but no run appeared within 150s."
+            echo "::error::Check the Actions tab; the publish may still be running."
+            exit 1
+          fi
+          echo "watching run $RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/$RUN"
+
+          # --exit-status makes this job fail when the publish fails, which is the whole
+          # point of waiting instead of dispatching and reporting success regardless.
+          gh run watch "$RUN" --exit-status --interval 15
 
   java:
     name: Release Java
