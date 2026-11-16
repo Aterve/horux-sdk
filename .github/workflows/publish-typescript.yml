@@ -196,18 +196,29 @@ jobs:
       - name: Publish to npmjs
         env:
           NPM_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
+          PKG: '@aterve/horux-client'
+          VERSION: ${{ steps.disttag.outputs.version }}
+          TAG: ${{ steps.disttag.outputs.tag }}
         run: |
           set -euo pipefail
-          if [ -n "${NPM_TOKEN:-}" ]; then
+
+          # Skip if this exact version is already on npmjs. Not error-swallowing: it is a
+          # positive existence check, and it exists because a release can fail AFTER this
+          # step -- the GitHub Packages mirror failed on 1.1.2 with npmjs already published,
+          # and without this a re-run dies on `E409 Cannot publish over previously staged
+          # version` before it can finish the half that is still missing.
+          if npm view "$PKG@$VERSION" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "$PKG@$VERSION is already on npmjs; skipping (this is a re-run)."
+          elif [ -n "${NPM_TOKEN:-}" ]; then
             echo "::warning::Publishing with NPM_PUBLISH_TOKEN. This is the bootstrap path:"
             echo "::warning::once the package exists, configure trusted publishing on npmjs"
             echo "::warning::for workflow 'release.yml' and delete this secret."
             npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
-            npm publish --ignore-scripts --access public --tag "${{ steps.disttag.outputs.tag }}"
+            npm publish --ignore-scripts --access public --tag "$TAG"
           else
             echo "No NPM_PUBLISH_TOKEN present: publishing via trusted publishing (OIDC)."
             echo "Provenance is attached automatically on this path."
-            npm publish --ignore-scripts --access public --tag "${{ steps.disttag.outputs.tag }}"
+            npm publish --ignore-scripts --access public --tag "$TAG"
           fi
 
       # The same tarball, mirrored to GitHub Packages. npmjs is the canonical registry and
@@ -228,18 +239,46 @@ jobs:
       - name: Mirror to GitHub Packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PKG: '@aterve/horux-client'
+          VERSION: ${{ steps.disttag.outputs.version }}
+          TAG: ${{ steps.disttag.outputs.tag }}
+          GHP: https://npm.pkg.github.com
         run: |
           set -euo pipefail
           echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > .npmrc.ghp
+
+          if npm view "$PKG@$VERSION" version --userconfig .npmrc.ghp --registry "$GHP" >/dev/null 2>&1; then
+            echo "$PKG@$VERSION is already on GitHub Packages; skipping."
+            rm -f .npmrc.ghp
+            exit 0
+          fi
+
+          # `publishConfig` in package.json OVERRIDES the CLI at publish time -- including
+          # `--registry`. The first attempt passed `--registry https://npm.pkg.github.com`
+          # and npm published to npmjs anyway, announcing
+          # `Publishing to https://registry.npmjs.org`, then failed E409 against the version
+          # it had just pushed there. So the pin has to come out of the manifest for this
+          # publish: provenance with it, since that is an npmjs/sigstore feature and a
+          # `publishConfig.provenance: true` cannot be turned off from the command line
+          # either. package.json is restored immediately afterwards.
+          cp package.json package.json.orig
+          node -e '
+            const fs = require("fs");
+            const p = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            p.publishConfig = { access: "public" };
+            fs.writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n");
+          '
+          trap 'mv -f package.json.orig package.json' EXIT
+
           npm publish \
             --userconfig .npmrc.ghp \
-            --registry https://npm.pkg.github.com \
-            --provenance false \
+            --registry "$GHP" \
             --ignore-scripts \
             --access public \
-            --tag "${{ steps.disttag.outputs.tag }}"
+            --tag "$TAG"
+
           rm -f .npmrc.ghp
-          echo "mirrored ${{ steps.disttag.outputs.version }} to npm.pkg.github.com under dist-tag '${{ steps.disttag.outputs.tag }}'"
+          echo "mirrored $VERSION to GitHub Packages under dist-tag '$TAG'"
 
       - name: Summarise what was published
         run: |
