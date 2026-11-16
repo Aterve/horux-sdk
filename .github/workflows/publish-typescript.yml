@@ -1,26 +1,18 @@
 name: 2 · Publish — TypeScript
 
+# `workflow_call` ONLY, and that is a requirement of npm trusted publishing rather than a
+# preference. npm validates the OIDC claim against the **calling** workflow's filename, so
+# a package configured for `release.yml` cannot also be published by a direct
+# `typescript-v*` tag push or a dispatch of this file -- those runs present a different
+# workflow identity and are rejected at the registry. One entry point, one identity:
+# `3 · Release — SDKs (manual)`.
 on:
-  push:
-    tags:
-      - 'typescript-v*.*.*'
   workflow_call:
     inputs:
       version:
         required: false
         type: string
       prerelease:
-        required: false
-        default: false
-        type: boolean
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version to publish (leave empty to use package.json version)'
-        required: false
-        type: string
-      prerelease:
-        description: 'Mark as pre-release'
         required: false
         default: false
         type: boolean
@@ -108,13 +100,16 @@ jobs:
             typescript/README.md
           retention-days: 1
 
-  publish-github-packages:
-    name: Publish to GitHub Packages
+  publish-npmjs:
+    name: Publish to npmjs
     runs-on: ubuntu-latest
     needs: build
     permissions:
       contents: read
-      packages: write
+      # OIDC: npm exchanges this short-lived token for publish rights, so no
+      # npm token is involved at all. Must also be granted by the CALLING job in
+      # release.yml -- the docs are explicit that both parent and child need it.
+      id-token: write
 
     defaults:
       run:
@@ -132,12 +127,32 @@ jobs:
 
       # npmjs, not GitHub Packages: a package on GitHub Packages needs authentication to
       # INSTALL, which is the wrong shape for a public client SDK.
-      - name: Setup Node.js for npmjs
+      #
+      # NO `registry-url:` here, deliberately. That input makes setup-node write
+      # `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` into .npmrc, and with no
+      # token in the environment that line resolves to an EMPTY credential -- which npm
+      # sends as auth rather than falling through to OIDC. The registry lives in
+      # package.json's `publishConfig` instead, where it is also true for a human running
+      # `npm publish` locally.
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
-          scope: '@aterve'
+
+      # Trusted publishing needs npm >= 11.5.1 (and Node >= 22.14). Node 24 ships an npm 11
+      # whose patch level varies by minor, so this asserts rather than assumes: a too-old
+      # npm does not fail, it quietly asks for a token and 404s or 401s on a package it
+      # cannot authenticate for, which is a confusing way to learn about a version floor.
+      - name: Ensure npm supports trusted publishing
+        run: |
+          set -euo pipefail
+          need=11.5.1
+          have="$(npm --version)"
+          if [ "$(printf '%s\n%s\n' "$need" "$have" | sort -V | head -1)" != "$need" ]; then
+            echo "npm $have is older than $need; upgrading for OIDC support"
+            npm install -g "npm@>=$need"
+          fi
+          echo "npm $(npm --version), node $(node --version)"
 
       # The step that used to sit here ran
       #   sed -i 's/"name": "@horus\/client"/"name": "@aterve\/horux-client"/' package.json
@@ -149,19 +164,36 @@ jobs:
         run: |
           npm version ${{ needs.build.outputs.version }} --no-git-tag-version --allow-same-version
 
-      # `--access public` because a scoped package defaults to restricted, and the first
-      # publish of a scope is where that bites.
+      # Trusted publishing (OIDC) is the intended path: npm exchanges the workflow's
+      # short-lived OIDC token for publish rights, so there is no long-lived npm token to
+      # leak or rotate, and provenance is attached automatically for a public package from
+      # a public repository.
+      #
+      # THE TOKEN BRANCH IS A BOOTSTRAP, NOT A FALLBACK. npm will not let you configure a
+      # trusted publisher for a package that does not exist yet, so the FIRST publish of
+      # `@aterve/horux-client` has to be authenticated the old way. Set NPM_PUBLISH_TOKEN,
+      # release once, configure the trusted publisher on npmjs (workflow file:
+      # `release.yml` -- npm validates the CALLING workflow), then DELETE the secret. With
+      # it gone this step takes the OIDC path and says so in the log.
+      #
+      # `--access public`: a scoped package defaults to restricted, and the first publish
+      # of a scope is where that bites. `publishConfig` says it too; this is belt and braces.
       - name: Publish to npmjs
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::error::NPM_PUBLISH_TOKEN is not set, so this build cannot be published."
-            echo "::error::Add an npm automation token as the repository secret NPM_PUBLISH_TOKEN."
-            exit 1
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            echo "::warning::Publishing with NPM_PUBLISH_TOKEN. This is the bootstrap path:"
+            echo "::warning::once the package exists, configure trusted publishing on npmjs"
+            echo "::warning::for workflow 'release.yml' and delete this secret."
+            npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
+            npm publish --ignore-scripts --access public
+          else
+            echo "No NPM_PUBLISH_TOKEN present: publishing via trusted publishing (OIDC)."
+            echo "Provenance is attached automatically on this path."
+            npm publish --ignore-scripts --access public
           fi
-          npm publish --ignore-scripts --access public
 
       - name: Create GitHub Packages summary
         run: |
@@ -185,7 +217,7 @@ jobs:
   create-github-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [build, publish-github-packages]
+    needs: [build, publish-npmjs]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write

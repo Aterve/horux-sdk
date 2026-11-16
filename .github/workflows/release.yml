@@ -93,7 +93,14 @@ jobs:
     if: inputs.component == 'typescript' || inputs.component == 'all'
     permissions:
       contents: write
-      packages: write
+      # npm trusted publishing. Two things make this line load-bearing: the OIDC token is
+      # what npm exchanges for publish rights, and npm validates the claim against THIS
+      # workflow's filename -- `release.yml` is what you configure on npmjs, not
+      # `publish-typescript.yml`. The docs are explicit that parent and child both need
+      # the permission; scripts/check-workflow-permissions.mjs fails the build if this
+      # drifts out of step with the callee (it caught exactly this omission when the OIDC
+      # support was added).
+      id-token: write
     uses: ./.github/workflows/publish-typescript.yml
     secrets: inherit
     with:

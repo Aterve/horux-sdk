@@ -5,8 +5,10 @@ This guide covers publishing the Horux client SDKs to their respective package r
 > **Read this first — three things changed when the SDKs moved out of the platform
 > monorepo (16 Nov 2026), and older instructions below may still reflect the old setup.**
 >
-> 1. **Registries.** TypeScript publishes to **npmjs** and Python to **PyPI**, not GitHub
->    Packages. The Python workflow previously uploaded to `nuget.pkg.github.com` — the
+> 1. **Registries and credentials.** TypeScript publishes to **npmjs** via **trusted
+>    publishing (OIDC)** — no npm token, provenance automatic, and the trusted publisher on
+>    npmjs must name `release.yml` because npm validates the *calling* workflow. Python
+>    publishes to **PyPI** with a token, not GitHub The Python workflow previously uploaded to `nuget.pkg.github.com` — the
 >    NuGet endpoint — behind `continue-on-error`, so it had never published anything.
 >    Java is still on GitHub Packages and is the one SDK that needs authentication to
 >    consume; moving it to Maven Central is an open task.

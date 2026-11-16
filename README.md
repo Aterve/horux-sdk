@@ -54,14 +54,44 @@ subdirectory. The others are `<language>-vX.Y.Z`.
 [`docs/publishing.md`](docs/publishing.md) is the long form: per-language detail, version
 policy, verification steps and the failure modes each workflow has actually hit.
 
-Secrets the publish workflows need, as repository secrets:
+### Credentials
 
-| Secret | Used by | Without it |
+| SDK | Registry | Credential |
 |---|---|---|
-| `NPM_PUBLISH_TOKEN` | TypeScript → npmjs | the publish step fails with a named error |
-| `PYPI_PUBLISH_TOKEN` | Python → PyPI | same |
-| — | Go | none; the proxy serves the tag |
-| `GITHUB_TOKEN` | Java → GitHub Packages | built in |
+| TypeScript | npmjs | **trusted publishing (OIDC)** — no secret once bootstrapped |
+| Python | PyPI | `PYPI_PUBLISH_TOKEN` (PyPI supports trusted publishing too; not wired yet) |
+| Go | Go module proxy | none — the proxy serves the tag |
+| Java | GitHub Packages | `GITHUB_TOKEN`, built in |
+
+#### npm trusted publishing
+
+The TypeScript publish exchanges the workflow's OIDC token for publish rights, so there is
+no long-lived npm token to rotate or leak, and **provenance is attached automatically** for
+a public package from a public repository.
+
+Three things about it are easy to get wrong, and all three are encoded in the workflows:
+
+1. **npm validates the *calling* workflow's filename.** `publish-typescript.yml` is invoked
+   by `release.yml`, so the trusted publisher on npmjs must name **`release.yml`**. Configure
+   `publish-typescript.yml` and every release is rejected at the registry.
+2. **`id-token: write` is needed on both the parent and the child** job. `release.yml`'s
+   `typescript` job and `publish-typescript.yml`'s `publish-npmjs` job both declare it, and
+   `scripts/check-workflow-permissions.mjs` fails the build if they fall out of step — it
+   caught exactly that omission when this was first wired.
+3. **One entry point only.** `publish-typescript.yml` is `workflow_call`-only for this
+   reason: a direct `typescript-v*` tag push or a dispatch of that file presents a different
+   workflow identity and cannot publish.
+
+It also needs npm ≥ 11.5.1 and Node ≥ 22.14. The workflow asserts the npm floor and upgrades
+if the runner's Node ships something older, because a too-old npm does not report a missing
+feature — it quietly asks for a token and then fails authentication.
+
+**Bootstrapping, once:** npm will not let you configure a trusted publisher for a package
+that does not exist, so the first publish of `@aterve/horux-client` needs a token. Set
+`NPM_PUBLISH_TOKEN`, run one release, configure the trusted publisher
+(Settings → Trusted Publisher → GitHub Actions, workflow `release.yml`), then **delete the
+secret**. The publish step takes the OIDC path whenever that secret is absent and logs which
+path it used, so there is no ambiguity about which credential published a given version.
 
 ⚠️ **Java is the one SDK that is not yet on a public registry.** It publishes to GitHub
 Packages, which requires a reader to authenticate — wrong for an open client library.
