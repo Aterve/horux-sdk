@@ -101,6 +101,8 @@ jobs:
       # npm token is involved at all. Must also be granted by the CALLING job in
       # release.yml -- the docs are explicit that both parent and child need it.
       id-token: write
+      # For the GitHub Packages mirror below, which authenticates with GITHUB_TOKEN.
+      packages: write
 
     defaults:
       run:
@@ -169,37 +171,77 @@ jobs:
       #
       # `--access public`: a scoped package defaults to restricted, and the first publish
       # of a scope is where that bites. `publishConfig` says it too; this is belt and braces.
-      - name: Publish to npmjs
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
+      # The dist-tag, decided once and used by BOTH publishes below. `npm publish`
+      # otherwise always writes `latest`, and `inputs.prerelease` reached only the GitHub
+      # Release flag -- so publishing 1.2.0-rc.1 would have moved `latest` onto a
+      # prerelease and every plain `npm install @aterve/horux-client` would have resolved
+      # to it. Decided from the version rather than the input, because the version is what
+      # semver and the registry agree on: a `-` suffix means prerelease.
+      #
+      # In its own step because each `run:` is its own shell: computed inside the npmjs
+      # publish, `$TAG` was empty by the time the mirror ran.
+      - name: Decide the dist-tag
+        id: disttag
         run: |
           set -euo pipefail
-          # The dist-tag, which `npm publish` otherwise always sets to `latest`.
-          # `inputs.prerelease` reached only the GitHub Release flag, so publishing
-          # 1.2.0-rc.1 would have moved `latest` onto a prerelease and every plain
-          # `npm install @aterve/horux-client` would have resolved to it. Decided from the
-          # version itself rather than the input, because the version is what semver and
-          # the registry agree on: anything with a `-` suffix is a prerelease.
           VERSION='${{ needs.build.outputs.version }}'
           case "$VERSION" in
             *-*) TAG=next ;;
             *)   TAG=latest ;;
           esac
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
           echo "publishing $VERSION under dist-tag '$TAG'"
 
+      - name: Publish to npmjs
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
           if [ -n "${NPM_TOKEN:-}" ]; then
             echo "::warning::Publishing with NPM_PUBLISH_TOKEN. This is the bootstrap path:"
             echo "::warning::once the package exists, configure trusted publishing on npmjs"
             echo "::warning::for workflow 'release.yml' and delete this secret."
             npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
-            npm publish --ignore-scripts --access public --tag "$TAG"
+            npm publish --ignore-scripts --access public --tag "${{ steps.disttag.outputs.tag }}"
           else
             echo "No NPM_PUBLISH_TOKEN present: publishing via trusted publishing (OIDC)."
             echo "Provenance is attached automatically on this path."
-            npm publish --ignore-scripts --access public --tag "$TAG"
+            npm publish --ignore-scripts --access public --tag "${{ steps.disttag.outputs.tag }}"
           fi
 
-      - name: Create GitHub Packages summary
+      # The same tarball, mirrored to GitHub Packages. npmjs is the canonical registry and
+      # goes FIRST deliberately: if this step fails the release is red with the version
+      # already on npmjs, which is a state you can read and finish by hand -- whereas the
+      # reverse order would leave the mirror ahead of the registry everyone installs from.
+      #
+      # Three things differ from the npmjs publish:
+      #   * the registry is overridden on the CLI, because package.json's publishConfig
+      #     points `@aterve` at npmjs (it has to -- that is what the first failed publish
+      #     taught us) and publishConfig cannot be per-registry;
+      #   * `--provenance false`, because provenance is an npmjs/sigstore feature and
+      #     publishConfig turns it on globally. Left on, this step fails;
+      #   * GITHUB_TOKEN, not OIDC. GitHub Packages has no trusted publishing.
+      #
+      # Note for consumers: a package here needs `read:packages` auth to install even
+      # though the repository is public. npmjs is the one to tell people about.
+      - name: Mirror to GitHub Packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > .npmrc.ghp
+          npm publish \
+            --userconfig .npmrc.ghp \
+            --registry https://npm.pkg.github.com \
+            --provenance false \
+            --ignore-scripts \
+            --access public \
+            --tag "${{ steps.disttag.outputs.tag }}"
+          rm -f .npmrc.ghp
+          echo "mirrored ${{ steps.disttag.outputs.version }} to npm.pkg.github.com under dist-tag '${{ steps.disttag.outputs.tag }}'"
+
+      - name: Summarise what was published
         run: |
           VERSION="${{ needs.build.outputs.version }}"
           REPO_OWNER="${{ github.repository_owner }}"

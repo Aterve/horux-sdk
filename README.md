@@ -58,10 +58,41 @@ policy, verification steps and the failure modes each workflow has actually hit.
 
 | SDK | Registry | Credential |
 |---|---|---|
-| TypeScript | npmjs | **trusted publishing (OIDC)** — no secret once bootstrapped |
+| TypeScript | npmjs **+ GitHub Packages** | **trusted publishing (OIDC)** for npmjs; `GITHUB_TOKEN` for the mirror |
 | Python | PyPI | **trusted publishing (OIDC)** — no secret, ever |
 | Go | Go module proxy | none — the proxy serves the tag |
 | Java | GitHub Packages | `GITHUB_TOKEN`, built in |
+
+#### The GitHub Packages mirror
+
+Every TypeScript release publishes twice: **npmjs first**, then the identical tarball to
+`npm.pkg.github.com`. npmjs is canonical — it is what the install instructions name, it
+needs no authentication, and it is where provenance lives. The mirror exists for anything
+that resolves `@aterve` from GitHub Packages, which is how this repository's own `.npmrc`
+used to be set up.
+
+To install from the mirror you need a token with `read:packages`, **even though the
+repository is public** — that asymmetry is the whole reason npmjs is the canonical one:
+
+```bash
+echo "@aterve:registry=https://npm.pkg.github.com" >> .npmrc
+npm install @aterve/horux-client
+```
+
+Three differences from the npmjs publish, all forced: the registry is overridden on the CLI
+(package.json's `publishConfig` must point at npmjs, which is what the first failed publish
+established), `--provenance false` because provenance is an npmjs/sigstore feature that
+`publishConfig` turns on globally, and `GITHUB_TOKEN` because GitHub Packages has no trusted
+publishing.
+
+Order matters and is deliberate: if the mirror fails, the release goes red with the version
+already on npmjs — a state you can read and finish by hand. The reverse order would leave
+the mirror ahead of the registry everyone actually installs from.
+
+⚠️ **GitHub Packages has no Python registry at all** (npm, RubyGems, Maven/Gradle, NuGet and
+Docker only), so `horux-client` on PyPI cannot be mirrored there. The old Python workflow
+uploaded to `nuget.pkg.github.com` — the NuGet endpoint — which is the same fact discovered
+the hard way.
 
 #### PyPI trusted publishing
 

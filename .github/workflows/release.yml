@@ -93,6 +93,9 @@ jobs:
     if: inputs.component == 'typescript' || inputs.component == 'all'
     permissions:
       contents: write
+      # For the GitHub Packages mirror in the callee: npmjs is the canonical registry and
+      # GitHub Packages gets the same tarball afterwards, authenticated with GITHUB_TOKEN.
+      packages: write
       # npm trusted publishing. Two things make this line load-bearing: the OIDC token is
       # what npm exchanges for publish rights, and npm validates the claim against THIS
       # workflow's filename -- `release.yml` is what you configure on npmjs, not
