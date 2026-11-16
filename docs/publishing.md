@@ -58,7 +58,7 @@ Current versions -- no longer necessarily equal:
 
 | SDK | Version | Published? |
 |---|---|---|
-| TypeScript | 1.1.1 | yes, npmjs |
+| TypeScript | 1.1.2 | yes, npmjs + GitHub Packages |
 | Go | 1.1.0 | not yet |
 | Python | 1.1.0 | not yet |
 | Java | 1.1.0 | not yet |
