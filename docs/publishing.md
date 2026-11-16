@@ -67,7 +67,7 @@ The places each version is recorded:
 |---|---|
 | TypeScript | `typescript/package.json` (and `package-lock.json`) |
 | Go | nowhere in the source - the Git tag `go/vX.Y.Z` *is* the version |
-| Python | `pyproject.toml`, `setup.py`, `horux_client/__init__.py` (`__version__`) |
+| Python | `pyproject.toml` and `horux_client/__init__.py` (`__version__`) — `setup.py` was deleted in the move; it duplicated every field and was never invoked |
 | Java | `pom.xml` |
 
 Bump all of them in one commit, then push all four tags. A release that moves
