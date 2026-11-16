@@ -31,7 +31,7 @@ export function resolveConfig(config: HoruxConfig): ResolvedHoruxConfig {
   const minRetryBackoff = config.minRetryBackoff && config.minRetryBackoff > 0 ? config.minRetryBackoff : 1000;
   const maxRetryBackoff = config.maxRetryBackoff && config.maxRetryBackoff > 0 ? config.maxRetryBackoff : 60000;
 
-  let maxBufferSize = config.maxBufferSize && config.maxBufferSize > 0 ? config.maxBufferSize : maxBatchSize * 10;
+  let maxBufferSize = config.maxBufferSize && config.maxBufferSize > 0 ? config.maxBufferSize : maxBatchSize * 100;
   if (maxBufferSize < maxBatchSize) {
     maxBufferSize = maxBatchSize;
   }
@@ -131,8 +131,9 @@ export function configFromEnv(overrides?: Partial<HoruxConfig>): HoruxConfig {
  * Pacing options are deliberately left unset so resolveConfig supplies them.
  * This helper used to pin maxBatchSize to 100 where resolveConfig defaults it
  * to 1000, and because maxBufferSize derives from maxBatchSize, anyone
- * following the documented helper silently got a 10x smaller buffer (1,000
- * instead of 10,000) and began dropping telemetry 10x sooner during an outage.
+ * following the documented helper silently got a 10x smaller buffer (10,000
+ * instead of 100,000 at today's multiplier) and began dropping telemetry 10x
+ * sooner during an outage.
  */
 export function defaultConfig(required: {
   ingestorUrl: string;

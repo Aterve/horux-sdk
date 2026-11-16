@@ -85,7 +85,7 @@ HoruxConfig config = HoruxConfig.builder()
 
     // Backpressure: how much to hold when the ingestor throttles, and what to
     // sacrifice once that is full.
-    .maxBufferSize(10000)                   // Optional, default 10x maxBatchSize
+    .maxBufferSize(100000)                  // Optional, default 100x maxBatchSize
     .dropPolicy(DropPolicy.OLDEST)          // Optional, default OLDEST
     .minRetryBackoff(Duration.ofSeconds(1)) // Optional, default 1s
     .maxRetryBackoff(Duration.ofSeconds(60))// Optional, default 60s

@@ -285,7 +285,7 @@ ingestor accepts as much of the batch as fits and tells the client how long to
 wait for the rest, so a backlog drains at the allowed rate instead of being
 rejected whole:
 
-- **Bounded queue**: at most `max_buffer_size` items are held (default: 10x
+- **Bounded queue**: at most `max_buffer_size` items are held (default: 100x
   `max_batch_size`). Past that, `drop_policy` decides what goes (`"oldest"` by
   default, so the most recent telemetry survives an outage). `on_drop` reports
   what was discarded.
@@ -298,11 +298,20 @@ rejected whole:
 - **Permanent rejections**: a payload the ingestor can never accept (400, 413,
   422) is dropped rather than retried forever ahead of everything behind it.
 
+  Sizing it: the queue grows on demand, so the default is a ceiling and not an
+  allocation. At a measured ~832 bytes per queued metric with five labels,
+  100,000 items is ~79MB at full stretch, and the outage it survives is
+  `items / (items per second)` -- about 17 minutes at 100/s, or 2.8 hours at
+  10/s. The bound is per client per **process**, so a pre-forking server holds
+  one buffer per worker: check four workers x your setting against the
+  container's memory limit before raising it, because being OOM-killed during
+  the incident the buffer exists to survive is worse than dropping telemetry.
+
 ```python
 config = HoruxConfig(
     api_token="...",
     resource_id="...",
-    max_buffer_size=10000,
+    max_buffer_size=100000,
     drop_policy="oldest",
     on_drop=lambda stream, count, reason: logging.warning(
         "horux dropped %d %s (%s)", count, stream, reason

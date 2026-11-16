@@ -43,7 +43,19 @@ type Config struct {
 	// MaxBufferSize is the most items held while the ingestor is throttling or
 	// unreachable. Past it DropPolicy decides what goes. The bound is what
 	// keeps a rate limit from turning into unbounded memory growth inside the
-	// host application. Defaults to 10x MaxBatchSize.
+	// host application. Defaults to 100x MaxBatchSize.
+	//
+	// The queue grows on demand (it starts at capacity 64), so this is a
+	// ceiling rather than an allocation: raising it costs nothing until a
+	// backlog actually forms. Measured at ~832 bytes per queued metric with
+	// five labels, the 100,000-item default is ~79MB at full stretch, which is
+	// how long an outage it survives: items / (items per second).
+	//
+	// It is per client, per PROCESS. A pre-forking server holds one buffer per
+	// worker, so four workers at this default can reach ~316MB mid-outage --
+	// which is the number to check against a container limit before raising
+	// this further. Being OOM-killed during the incident the buffer exists to
+	// survive is the one outcome worse than dropping telemetry.
 	MaxBufferSize int
 
 	// DropPolicy decides which items are discarded once MaxBufferSize is
@@ -84,7 +96,7 @@ func DefaultConfig() *Config {
 		IngestorURL:           "https://ingest.horux.io",
 		FlushInterval:         10 * time.Second,
 		MaxBatchSize:          1000,
-		MaxBufferSize:         10000,
+		MaxBufferSize:         100000,
 		DropPolicy:            DropOldest,
 		MinRetryBackoff:       1 * time.Second,
 		MaxRetryBackoff:       60 * time.Second,
@@ -103,7 +115,7 @@ func (c *Config) applyDefaults() {
 		c.MaxBatchSize = 1000
 	}
 	if c.MaxBufferSize <= 0 {
-		c.MaxBufferSize = c.MaxBatchSize * 10
+		c.MaxBufferSize = c.MaxBatchSize * 100
 	}
 	if c.MaxBufferSize < c.MaxBatchSize {
 		c.MaxBufferSize = c.MaxBatchSize

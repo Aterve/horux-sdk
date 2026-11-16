@@ -78,7 +78,7 @@ config.HTTPTimeout = 30 * time.Second
 
 // Backpressure: how much to hold when the ingestor throttles, and what to
 // sacrifice once that is full.
-config.MaxBufferSize = 10000              // default: 10x MaxBatchSize
+config.MaxBufferSize = 100000             // default: 100x MaxBatchSize (~79MB at ~832B/item)
 config.DropPolicy = client.DropOldest     // or client.DropNewest
 config.MinRetryBackoff = 1 * time.Second
 config.MaxRetryBackoff = 60 * time.Second

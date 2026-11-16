@@ -48,7 +48,7 @@ public class HoruxConfig {
         this.instanceMetadata = builder.instanceMetadata != null ? builder.instanceMetadata : getDefaultInstanceMetadata();
         this.autoAddInstanceLabels = builder.autoAddInstanceLabels;
 
-        int buffer = builder.maxBufferSize > 0 ? builder.maxBufferSize : this.maxBatchSize * 10;
+        int buffer = builder.maxBufferSize > 0 ? builder.maxBufferSize : this.maxBatchSize * 100;
         this.maxBufferSize = Math.max(buffer, this.maxBatchSize);
         this.dropPolicy = builder.dropPolicy != null ? builder.dropPolicy : DropPolicy.OLDEST;
         this.minRetryBackoff = builder.minRetryBackoff != null ? builder.minRetryBackoff : Duration.ofSeconds(1);

@@ -14,11 +14,11 @@ const required = {
   resourceId: 'resource-1',
 };
 
-test('the buffer defaults to ten times the batch', () => {
+test('the buffer defaults to one hundred times the batch', () => {
   const resolved = resolveConfig({ ...required });
 
   assert.equal(resolved.maxBatchSize, 1000);
-  assert.equal(resolved.maxBufferSize, 10_000);
+  assert.equal(resolved.maxBufferSize, 100_000);
 });
 
 // defaultConfig used to pin maxBatchSize to 100 where resolveConfig defaults it

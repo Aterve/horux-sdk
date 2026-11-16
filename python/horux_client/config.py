@@ -66,7 +66,7 @@ class HoruxConfig:
         self.http_timeout = http_timeout
         self.auto_add_instance_labels = auto_add_instance_labels
         self.gateway_url = gateway_url
-        self.max_buffer_size = max_buffer_size or max_batch_size * 10
+        self.max_buffer_size = max_buffer_size or max_batch_size * 100
         self.max_buffer_size = max(self.max_buffer_size, max_batch_size)
         self.drop_policy = drop_policy
         self.min_retry_backoff = min_retry_backoff
