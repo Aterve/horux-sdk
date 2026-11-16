@@ -66,7 +66,14 @@ jobs:
           grep "^version = " pyproject.toml
 
       - name: Install package dependencies
-        run: pip install -e ".[dev]"
+        # `[dev,lint]`, not `[dev]`. `[dev]` is pytest and types-requests; black, ruff and
+        # mypy live in `[lint]` because they publish no wheels for 3.8 and would break the
+        # test matrix's oldest leg. This job pins 3.11, so it can have both -- and it needs
+        # both, because the gates below are no longer swallowed: with
+        # `continue-on-error: true` on them, `mypy: command not found` (exit 127) was
+        # invisible and a release published without ever type-checking. Making them
+        # blocking is what surfaced it, on the first Python release attempt.
+        run: pip install -e ".[dev,lint]"
 
       # Blocking, measured rather than assumed: mypy, ruff, black and pytest all exit 0 on
       # this tree today. They used to be `|| echo ... continuing` AND
